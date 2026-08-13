@@ -344,7 +344,6 @@ describe("structured state integrity findings", () => {
     );
   });
 });
-
 describe("doctor state integrity oauth dir checks", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome = "";
