@@ -463,10 +463,11 @@ export function noteSandboxScopeWarnings(cfg: OpenClawConfig) {
       continue;
     }
 
-    const agentPath = source.kind === "entries" ? `agents.entries.${source.key}` : "agents.list";
+    const agentPath =
+      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list (id "${agentId}")`;
     warnings.push(
       [
-        `- ${agentPath} (id "${agentId}") sandbox ${overrides.join("/")} overrides ignored.`,
+        `- ${agentPath} sandbox ${overrides.join("/")} overrides ignored.`,
         `  scope resolves to "shared".`,
       ].join("\n"),
     );

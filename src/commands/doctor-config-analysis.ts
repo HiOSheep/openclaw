@@ -305,16 +305,11 @@ function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
     if (!agent || !isImplicitFallbackClobber(agent.model)) {
       continue;
     }
-    const id =
-      typeof agent.id === "string" && agent.id.trim()
-        ? agent.id.trim()
-        : source.kind === "list"
-          ? String(source.index)
-          : source.key;
+    const id = agent.id?.trim() || (source.kind === "list" ? String(source.index) : source.key);
     const primary = resolvePrimaryStringValue(agent.model);
     const location =
       source.kind === "entries"
-        ? `agents.entries.${source.key}.model (id=${id})`
+        ? `agents.entries.${source.key}.model`
         : `agents.list[${source.index}].model (id=${id})`;
     const modelStr =
       typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
