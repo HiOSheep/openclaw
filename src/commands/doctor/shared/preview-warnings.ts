@@ -1,7 +1,6 @@
 // Doctor preview warning aggregation for config that can surprise users before repair.
 import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentConfig,
 } from "../../../agents/agent-scope-config.js";
@@ -33,7 +32,7 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
 );
 
 function listAgentRecords(cfg: OpenClawConfig) {
-  return listAgentEntries(cfg).filter(hasRecord);
+  return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
 }
 
 function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
@@ -449,10 +448,7 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
     const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
     const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
-    const agentPath =
-      source.kind === "entries"
-        ? `agents.entries.${source.key}.tools`
-        : `agents.list[${source.index}].tools`;
+    const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
     const includeInheritedSections =
       agentTools !== undefined && typeof agentTools.profile !== "string";
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
@@ -490,12 +486,7 @@ function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): strin
   return warnings;
 }
 
-type DoctorPreviewNotes = {
-  /** Non-warning doctor notes shown during preview. */
-  infoNotes: string[];
-  /** Warning notes shown during preview. */
-  warningNotes: string[];
-};
+type DoctorPreviewNotes = { infoNotes: string[]; warningNotes: string[] };
 
 export async function resolveDoctorChannelPreviewConfig(params: {
   cfg: OpenClawConfig;
