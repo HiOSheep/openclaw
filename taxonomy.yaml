@@ -1967,11 +1967,11 @@ surfaces:
       source_ref: null
       process_version: 3
   - id: session-memory
-    name: Session, memory, and context engine
+    name: Session, memory, and state lifecycle
     family: core
     level: beta
     level_code: M3
-    rationale: Strong docs and active implementation. Maturity depends on transcript durability, compaction quality, and cross-client parity.
+    rationale: OpenClaw has durable sessions, memory, backup and restore, state migrations, and cross-client attachment. Maturity still depends on portability guarantees, recovery discipline, transcript durability, compaction quality, and cross-client parity.
     completeness_instructions: references/completeness/session-memory-and-context-engine.md
     categories:
       - name: CLI Session and Transcript Management
@@ -1983,6 +1983,9 @@ surfaces:
           - name: Transcript Management
             coverageIds: [session-memory.transcript-management]
             description: Covers Transcript Management across `openclaw sessions`, `openclaw transcripts`, cleanup, show/list/path behavior, TUI session history actions, and Gateway-backed session management commands.
+          - name: Session trajectory export and inspection
+            coverageIds: [session-memory.session-trajectory-export-and-inspection]
+            description: Operator export of bounded session trajectory bundles for inspection, diagnostics, and support handoff.
         docs:
           - docs/concepts/session.md
           - docs/reference/session-management-compaction.md
@@ -1992,8 +1995,9 @@ surfaces:
           - Transcript Management
           - session, memory, and context engine cli session and transcript management
           - cli session and transcript management
+          - session trajectory export and inspection
         category_note: cli-session-and-transcript-management.md
-        human_lts_override: true
+        human_lts_override: false
       - name: Token Management
         id: token-management
         features:
@@ -2098,15 +2102,21 @@ surfaces:
           - name: "Session Parity — Session continuity"
             coverageIds: [session-memory.session-parity-session-continuity]
             description: "Exact coverage for session continuity within Session Parity."
+          - name: Gateway-owned session attachment and catalogs
+            coverageIds: [session-memory.gateway-owned-session-attachment-and-catalogs]
+            description: Discovery and attachment to the same Gateway-owned session from Control UI, terminal, mobile, CLI, and coding harness clients.
         docs:
           - docs/web/webchat.md
           - docs/platforms/android.md
           - docs/channels/channel-routing.md
+          - docs/concepts/session-attachment.md
+          - docs/nodes/session-catalogs.md
         search_anchors:
           - Cross-client History
           - Session Parity
           - session, memory, and context engine cross-client history and session parity
           - cross-client history and session parity
+          - Gateway-owned session attachment and catalogs
         category_note: cross-client-history-and-session-parity.md
         human_lts_override: false
       - name: Diagnostics, Maintenance, and Recovery
@@ -2142,10 +2152,23 @@ surfaces:
           - name: "Session and transcript recovery — Update run"
             coverageIds: [session-memory.recovery-update-run]
             description: "Exact coverage for update run within Session and transcript recovery."
+          - name: Full-state archive backup and verification
+            coverageIds: [session-memory.full-state-archive-backup-and-verification]
+            description: Archive planning, safe capture, manifest and database verification, sensitive-state handling, and recorded backup freshness.
+          - name: Portable SQLite and Git state restore
+            coverageIds: [session-memory.portable-sqlite-and-git-state-restore]
+            description: Verified, sanitized, portable database snapshots and deterministic Git-backed state with fresh-target restore workflows.
+          - name: Versioned state migrations and rollback guards
+            coverageIds: [session-memory.versioned-state-migrations-and-rollback-guards]
+            description: Explicit schema history, pre-upgrade state protection, migration diagnostics, and guarded recovery across version changes.
         docs:
           - docs/gateway/diagnostics.md
           - docs/reference/session-management-compaction.md
           - docs/diagnostics/flags.md
+          - docs/cli/backup.md
+          - docs/install/backups.md
+          - docs/start/why-openclaw/versioned-state-guarded-upgrades.md
+          - docs/reference/database-schemas/state-schema-history.md
         search_anchors:
           - stuck-session diagnostics
           - restart recovery
@@ -2153,6 +2176,9 @@ surfaces:
           - diagnostic bundles
           - transcript repair
           - session maintenance warnings
+          - full-state archive backup and verification
+          - portable SQLite and Git state restore
+          - versioned state migrations and rollback guards
         category_note: diagnostics-maintenance-and-recovery.md
         human_lts_override: false
       - name: Core Prompts and Context
@@ -2262,10 +2288,14 @@ surfaces:
           - name: "Active Memory — Memory recall"
             coverageIds: [session-memory.active-memory-memory-recall]
             description: "Exact coverage for memory recall within Active Memory."
+          - name: Memory provenance, promotion, and forgetting
+            coverageIds: [session-memory.memory-provenance-promotion-and-forgetting]
+            description: Source lineage, admission, review, durable promotion, exclusion, and end-to-end forgetting for retained memory.
         docs:
           - docs/reference/memory-config.md
           - docs/concepts/memory.md
           - docs/channels/discord.md
+          - docs/concepts/memory-provenance.md
         search_anchors:
           - Memory Backend Storage
           - Embedding Search
@@ -2277,6 +2307,7 @@ surfaces:
           - root memory files
           - active memory
           - memory backend storage and embedding search
+          - memory provenance promotion and forgetting
         category_note: memory-files-tools-and-active-memory.md
         human_lts_override: false
       - name: Session Routing
