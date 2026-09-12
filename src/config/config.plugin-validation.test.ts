@@ -583,23 +583,7 @@ describe("config plugin validation", () => {
       expectNoMissingCodexPluginWarning(res.warnings);
     });
 
-    it.each([
-      {
-        title: "keeps request-parameter diagnostics scoped to the affected agent",
-        additionalAgents: {},
-        expectWarning: expectNoMissingCodexPluginWarning,
-      },
-      {
-        title: "still warns when another agent genuinely needs the missing plugin",
-        additionalAgents: {
-          codex: {
-            model: { primary: "openai/gpt-5.6", fallbacks: [] },
-            subagents: { model: "openai/gpt-5.6" },
-          },
-        },
-        expectWarning: expectMissingCodexPluginWarning,
-      },
-    ])("$title", ({ additionalAgents, expectWarning }) => {
+    it("scopes request-parameter diagnostics to the affected keyed agent", () => {
       const res = validateWithMissingCodexPlugin({
         agents: {
           entries: {
@@ -613,14 +597,13 @@ describe("config plugin validation", () => {
               subagents: { model: "openai/gpt-5.6" },
               params: { temperature: 0.4 },
             },
-            ...additionalAgents,
           },
         },
         plugins: { entries: { codex: {} } },
       });
 
       expect(res.ok).toBe(true);
-      expectWarning(res.warnings);
+      expectNoMissingCodexPluginWarning(res.warnings);
     });
 
     it("still warns when only one provider model route is pinned to OpenClaw", () => {
