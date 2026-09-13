@@ -1,12 +1,8 @@
 /**
  * Tests for task gateway methods and persisted task lifecycle responses.
  */
-import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TASKS_LIST_CURSOR_MAX_LENGTH } from "../../../packages/gateway-protocol/src/index.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
@@ -17,31 +13,21 @@ import { addSessionMember } from "../../config/sessions/session-sharing-store.js
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import {
-  type HeartbeatWakeRequest,
-  requestHeartbeat,
-  setHeartbeatWakeHandler,
-} from "../../infra/heartbeat-wake.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
-  createTaskRecord as createTaskRecordOrNull,
   getTaskById,
   markTaskTerminalById,
   recordTaskProgressByRunId,
 } from "../../tasks/runtime-internal.js";
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
-import {
-  resetTaskRegistryControlRuntimeForTests,
-  resetTaskRegistryForTests,
-  setTaskRegistryControlRuntimeForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
-import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import {
+  createTaskRecord,
+  getTaskPayload,
+  mainSessionTaskScope,
+  useTaskGatewayFixture,
+} from "./tasks.fixture.test-support.js";
 import {
   createContext,
   createSnapshotTask,
@@ -49,74 +35,7 @@ import {
   runTaskHandler,
 } from "./tasks.test-helpers.js";
 
-const stateDirEnvSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-const cancelSessionMock = vi.fn();
-const mainSessionTaskScope = {
-  requesterSessionKey: "agent:main:main",
-  ownerKey: "agent:main:main",
-  scopeKind: "session",
-} as const;
-
-let stateDir: string;
-let heartbeatWakeRequests: HeartbeatWakeRequest[] = [];
-let disposeHeartbeatWakeHandler: (() => void) | undefined;
-
-function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
-  const task = createTaskRecordOrNull(params);
-  if (!task) {
-    throw new Error("expected task creation to succeed");
-  }
-  return task;
-}
-
-beforeEach(async () => {
-  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tasks-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  resetTaskRegistryForTests();
-  heartbeatWakeRequests = [];
-  disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {
-    heartbeatWakeRequests.push(request);
-    return { status: "ran", durationMs: 0 };
-  });
-  cancelSessionMock.mockReset();
-  setTaskRegistryControlRuntimeForTests({
-    cancelActiveCronTaskRun: () => false,
-    getAcpSessionManager: () => ({
-      cancelSession: cancelSessionMock,
-    }),
-    killSubagentRunAdmin: async () => {
-      throw new Error("Unexpected subagent cancellation in task handler fixture");
-    },
-  });
-});
-
-afterEach(async () => {
-  try {
-    // Drain older targeted wakes through a global barrier before their fixture state retires.
-    const reason = `gateway-tasks-test-flush-${randomUUID()}`;
-    requestHeartbeat({ source: "other", intent: "immediate", reason, coalesceMs: 0 });
-    await vi.waitFor(() => {
-      expect(heartbeatWakeRequests.some((request) => request.reason === reason)).toBe(true);
-    });
-  } finally {
-    disposeHeartbeatWakeHandler?.();
-    disposeHeartbeatWakeHandler = undefined;
-    resetSystemEventsForTest();
-    resetTaskRegistryControlRuntimeForTests();
-    resetTaskRegistryForTests();
-    stateDirEnvSnapshot.restore();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-});
-
-async function getTaskPayload(taskId: string) {
-  const { calls, payload } = await runTaskHandler("tasks.get", { taskId });
-  expect(calls[0]?.[0]).toBe(true);
-  expect(payload?.task?.id).toBe(taskId);
-  return { calls, payload };
-}
+const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
   it("lists task summaries with SDK-facing statuses and filters", async () => {
@@ -571,23 +490,6 @@ describe("tasks gateway handlers", () => {
     expect(workerView.payload?.tasks?.map((task) => task.taskId)).toEqual([workerTask.taskId]);
   });
 
-  it("gets completed tasks with stable completed status", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
-      ...mainSessionTaskScope,
-      runId: "run-completed",
-      task: "Done task",
-      status: "succeeded",
-      deliveryStatus: "not_applicable",
-    });
-
-    const { payload } = await getTaskPayload(task.taskId);
-
-    expect(payload?.task?.status).toBe("completed");
-    expect(payload?.task?.title).toBe("Done task");
-    expect(payload?.task?.prompt).toBe("Done task");
-  });
-
   const cliStaleResult = { runtime: "cli", progressSummary: "CLI stale progress" } as const;
 
   it.each([
@@ -760,152 +662,6 @@ describe("tasks gateway handlers", () => {
     expect(payload?.task).not.toHaveProperty("lastActivity");
     expect(payload?.task?.prompt).toBe("Compile artifact");
     expect(JSON.stringify(calls[0]?.[1])).not.toContain("OpenClaw runtime context");
-  });
-
-  it("exposes tool activity in task summaries", async () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:activity",
-      runId: "run-tool-activity",
-      task: "Sweep the repo",
-      status: "running",
-      deliveryStatus: "not_applicable",
-    });
-    emitAgentEvent({
-      runId: "run-tool-activity",
-      stream: "tool",
-      data: { phase: "start", name: "read", toolCallId: "call-1" },
-    });
-    emitAgentEvent({
-      runId: "run-tool-activity",
-      stream: "tool",
-      data: { phase: "start", name: "exec", toolCallId: "call-2" },
-    });
-
-    const { payload } = await getTaskPayload(task.taskId);
-
-    expect(payload?.task?.toolUseCount).toBe(2);
-    expect(payload?.task?.lastToolName).toBe("exec");
-  });
-
-  it("projects isolated live subagent activity and best-effort diff stats", async () => {
-    const primary = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:primary",
-      runId: "run-live-primary",
-      task: "Implement task activity",
-      status: "running",
-      deliveryStatus: "not_applicable",
-      progressSummary: "Milestone remains authoritative",
-    });
-    const secondary = createTaskRecord({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
-      childSessionKey: "agent:main:subagent:secondary",
-      runId: "run-live-secondary",
-      task: "Review task activity",
-      status: "running",
-      deliveryStatus: "not_applicable",
-    });
-    const longLastLine = `Updating   files ${"x".repeat(220)}`;
-    const emitPrimaryTool = (data: Record<string, unknown>) =>
-      emitAgentEvent({ runId: primary.runId!, stream: "tool", data });
-
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "thinking",
-      data: { text: "Inspecting the fold\nThinking fallback" },
-    });
-    emitAgentEvent({
-      runId: secondary.runId!,
-      stream: "thinking",
-      data: { text: "Checking isolation\n  Thinking-only   progress  " },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "assistant",
-      data: { text: `Earlier line\n\n${longLastLine}` },
-    });
-    emitAgentEvent({
-      runId: primary.runId!,
-      stream: "thinking",
-      data: { text: "Later thinking must not replace assistant activity" },
-    });
-    emitPrimaryTool({
-      phase: "start",
-      name: "edit",
-      toolCallId: "edit-1",
-      args: {
-        path: "src/a.ts",
-        edits: [{ oldText: "one\ntwo", newText: "one\nthree\nfour" }],
-      },
-    });
-    emitPrimaryTool({ phase: "result", name: "edit", toolCallId: "edit-1", isError: false });
-    emitPrimaryTool({
-      phase: "start",
-      name: "write",
-      toolCallId: "write-1",
-      args: { file_path: "src/b.ts", content: "alpha\nbeta" },
-    });
-    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-1", isError: false });
-    emitPrimaryTool({
-      phase: "start",
-      name: "apply_patch",
-      toolCallId: "patch-1",
-      args: {
-        input: [
-          "*** Begin Patch",
-          "*** Update File: src/a.ts",
-          "@@",
-          "-old",
-          "+new",
-          "+newer",
-          "*** Delete File: src/c.ts",
-          "*** End Patch",
-        ].join("\n"),
-      },
-    });
-    emitPrimaryTool({
-      phase: "result",
-      name: "apply_patch",
-      toolCallId: "patch-1",
-      isError: false,
-    });
-    emitPrimaryTool({
-      phase: "start",
-      name: "write",
-      toolCallId: "write-failed",
-      args: { path: "src/ignored.ts", content: "not\ncounted" },
-    });
-    emitPrimaryTool({ phase: "result", name: "write", toolCallId: "write-failed", isError: true });
-
-    const primaryGet = await getTaskPayload(primary.taskId);
-    const secondaryGet = await getTaskPayload(secondary.taskId);
-    const listed = await runTaskHandler("tasks.list", {});
-    const listedPrimary = listed.payload?.tasks?.find((task) => task.id === primary.taskId);
-
-    expect(primaryGet.payload?.task?.lastActivity).toMatch(/^Updating files x+…$/);
-    expect(String(primaryGet.payload?.task?.lastActivity).length).toBeLessThanOrEqual(200);
-    expect(primaryGet.payload?.task?.diffStat).toEqual({ files: 3, added: 7, removed: 3 });
-    expect(primaryGet.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
-    expect(secondaryGet.payload?.task?.lastActivity).toBe("Thinking-only progress");
-    expect(secondaryGet.payload?.task).not.toHaveProperty("diffStat");
-    expect(listedPrimary?.lastActivity).toBe(primaryGet.payload?.task?.lastActivity);
-    expect(listedPrimary?.diffStat).toEqual(primaryGet.payload?.task?.diffStat);
-
-    markTaskTerminalById({ taskId: primary.taskId, status: "succeeded", endedAt: Date.now() });
-    const terminal = await getTaskPayload(primary.taskId);
-    expect(terminal.payload?.task).not.toHaveProperty("lastActivity");
-    expect(terminal.payload?.task).not.toHaveProperty("diffStat");
-    expect(terminal.payload?.task?.progressSummary).toBe("Milestone remains authoritative");
   });
 
   it("does not report cancellation for an ordinary task without a live owner", async () => {

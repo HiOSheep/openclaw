@@ -8,13 +8,14 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, sortTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { backgroundTaskIsExecuting } from "./chat-background-tasks-shared.ts";
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
 
 export type SubagentActivityPresentation = {
   rows: TaskSummary[];
-  overflowWorking: number;
+  overflowCount: number;
   taskIds: ReadonlySet<string>;
   nextExpiryAt: number | null;
 };
@@ -59,18 +60,40 @@ export function deriveSubagentActivity(params: {
   // terminal events cannot displace work that is still progressing.
   const eligible = [...active, ...recentTerminal];
   const rows = eligible.slice(0, SUBAGENT_ACTIVITY_LIMIT);
-  const overflowWorking = eligible
-    .slice(SUBAGENT_ACTIVITY_LIMIT)
-    .filter((task) => task.status === "running").length;
+  const overflowCount = Math.max(0, eligible.length - SUBAGENT_ACTIVITY_LIMIT);
   return {
     rows,
-    overflowWorking,
+    overflowCount,
     taskIds: new Set(eligible.map((task) => task.id)),
     nextExpiryAt,
   };
 }
 
 function subagentStatusDescription(task: TaskSummary): string {
+  if (isActiveTask(task)) {
+    if (task.execution?.state === "waiting") {
+      return t("chat.backgroundTasks.subagentActivity.waitingDescription");
+    }
+    if (task.execution?.state === "unknown") {
+      return t("chat.backgroundTasks.subagentActivity.unknownDescription");
+    }
+    if (task.execution?.state === "finished") {
+      return t("chat.backgroundTasks.subagentActivity.executionFinishedDescription");
+    }
+    if (task.execution?.state === "queued") {
+      return t("chat.backgroundTasks.subagentActivity.queuedDescription");
+    }
+  } else if (task.status === "completed") {
+    if (task.deliveryStatus === "pending" || task.deliveryStatus === "session_queued") {
+      return t("chat.backgroundTasks.subagentActivity.resultReadyDescription");
+    }
+    if (task.deliveryStatus === "delivered") {
+      return t("chat.backgroundTasks.subagentActivity.deliveredDescription");
+    }
+    if (task.deliveryStatus === "failed" || task.deliveryStatus === "parent_missing") {
+      return t("chat.backgroundTasks.subagentActivity.deliveryFailedDescription");
+    }
+  }
   const keys = {
     queued: "chat.backgroundTasks.subagentActivity.queuedDescription",
     running: "chat.backgroundTasks.subagentActivity.runningDescription",
@@ -83,30 +106,37 @@ function subagentStatusDescription(task: TaskSummary): string {
 }
 
 function subagentActivitySnippet(task: TaskSummary): string | undefined {
-  if (!isActiveTask(task) && task.terminalSummary?.trim()) {
-    return task.terminalSummary.trim();
+  if (!isActiveTask(task)) {
+    return task.terminalSummary?.trim() || task.error?.trim() || undefined;
   }
   return (
     task.lastActivity?.trim() ||
     task.progressSummary?.trim() ||
-    task.lastToolName?.trim() ||
+    (task.lastToolName?.trim()
+      ? `${t("chat.backgroundTasks.lastTool")}: ${task.lastToolName.trim()}`
+      : undefined) ||
     undefined
   );
 }
 
 function renderSubagentActivityIndicator(task: TaskSummary): TemplateResult {
+  const indicatorStatus =
+    task.status === "completed" &&
+    (task.deliveryStatus === "failed" || task.deliveryStatus === "parent_missing")
+      ? "failed"
+      : task.status;
   return html`<span
-    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${task.status}"
+    class="chat-subagent-activity__indicator chat-subagent-activity__indicator--${indicatorStatus}"
     aria-hidden="true"
   >
     <span
-      class="chat-subagent-activity__claw ${task.status === "running" ? "chat-reading-indicator" : ""}"
+      class="chat-subagent-activity__claw ${backgroundTaskIsExecuting(task) ? "chat-reading-indicator" : ""}"
       >${icons.claw}</span
     >
     ${
-      task.status === "failed" || task.status === "timed_out"
+      indicatorStatus === "failed" || indicatorStatus === "timed_out"
         ? html`<span class="chat-subagent-activity__badge"
-            >${task.status === "failed" ? icons.alertTriangle : icons.clock}</span
+            >${indicatorStatus === "failed" ? icons.alertTriangle : icons.clock}</span
           >`
         : nothing
     }
@@ -191,10 +221,10 @@ export function renderSubagentActivity(
         (task) => renderSubagentActivityRow(task, onOpenTaskDetail),
       )}
       ${
-        presentation.overflowWorking > 0
+        presentation.overflowCount > 0
           ? html`<div class="chat-subagent-activity__overflow">
-              ${t("chat.backgroundTasks.subagentActivity.moreWorking", {
-                count: String(presentation.overflowWorking),
+              ${t("chat.backgroundTasks.subagentActivity.moreSubagents", {
+                count: String(presentation.overflowCount),
               })}
             </div>`
           : nothing

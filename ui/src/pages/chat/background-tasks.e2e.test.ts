@@ -730,7 +730,7 @@ suite.define(() => {
         await expect
           .poll(() => firstRow.getAttribute("aria-label"))
           .toContain("Cancelled — stopped before completion.");
-        await detailPanel.getByText("Failed").waitFor();
+        await detailPanel.getByText("Cancelled").waitFor();
         expect(await firstRow.textContent()).not.toContain("Cross-checking requester ownership");
         expect(await activity.locator(".chat-diffstat").count()).toBe(0);
         expect(await detailPanel.locator(".chat-diffstat__add").textContent()).toBe("+14");
