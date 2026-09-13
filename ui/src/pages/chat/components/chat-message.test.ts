@@ -4598,22 +4598,8 @@ describe("grouped chat rendering", () => {
       );
 
     renderMessage();
-    const checkingCard = container.querySelector(
-      '.chat-assistant-attachment-card--checking[aria-busy="true"]',
-    );
-    const skeleton = checkingCard?.querySelector(
-      ".chat-assistant-attachment-card__status-meta.skeleton",
-    );
-    const actionSkeleton = checkingCard?.querySelector(
-      ".chat-assistant-attachment-card__action-skeleton.skeleton",
-    );
-    const actionReservation = checkingCard?.querySelector(
-      ".chat-assistant-attachment-card__actions--loading",
-    );
-    expect(skeleton?.getAttribute("aria-hidden")).toBe("true");
-    expect(skeleton?.textContent?.trim()).toBe("");
-    expect(actionSkeleton?.getAttribute("aria-hidden")).toBe("true");
-    expect(actionReservation?.getAttribute("aria-hidden")).toBe("true");
+    expect(container.querySelector(".chat-image-frame")?.getAttribute("aria-busy")).toBe("true");
+    expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
     await flushAssistantAttachmentAvailabilityChecks();
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source).replaceAll("%20", "+")}&meta=1`;

@@ -171,20 +171,28 @@ class MessageImageResourceDirective extends AsyncDirective {
           : decodeFailed
             ? t("chat.imageLightbox.loadFailed")
             : undefined;
-      return renderAssistantAttachmentStatusCard({
-        label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
-        badge: reason === undefined ? "" : t("chat.attachments.unavailable"),
-        reason,
-        path: isLocalAssistantAttachmentSource(image.url) ? image.url : undefined,
-        onAllow:
-          !decodeFailed && availability.status === "unavailable" && availability.canAllow
-            ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions, true)
-            : undefined,
-        onRetry:
-          !decodeFailed && availability.status === "unavailable" && availability.recoverable
-            ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions)
-            : undefined,
-      });
+      if (reason === undefined) {
+        return this.present(this.renderImagePlaceholder(image));
+      }
+      return this.present(
+        this.renderImageFrame(
+          image,
+          renderAssistantAttachmentStatusCard({
+            label: image.fileName ?? image.alt ?? t("chat.imageLightbox.untitled"),
+            badge: t("chat.attachments.unavailable"),
+            reason,
+            path: isLocalAssistantAttachmentSource(image.url) ? image.url : undefined,
+            onAllow:
+              !decodeFailed && availability.status === "unavailable" && availability.canAllow
+                ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions, true)
+                : undefined,
+            onRetry:
+              !decodeFailed && availability.status === "unavailable" && availability.recoverable
+                ? () => retryAssistantAttachmentAvailability(image.url, subscriptionOptions)
+                : undefined,
+          }),
+        ),
+      );
     }
     if (!this.managed) {
       const retained = this.retained;
@@ -216,14 +224,21 @@ class MessageImageResourceDirective extends AsyncDirective {
           this.pendingPreview = undefined;
           this.setValue(
             this.present(
-              previewUrl ? this.renderImageElement(this.image, previewUrl, this.options) : nothing,
+              previewUrl
+                ? this.renderImageElement(this.image, previewUrl, this.options)
+                : this.renderImagePlaceholder(this.image, t("chat.imageLightbox.loadFailed")),
             ),
           );
         }
       });
     }
     return this.present(
-      resource.value ? this.renderImageElement(image, resource.value, options) : nothing,
+      resource.value
+        ? this.renderImageElement(image, resource.value, options)
+        : this.renderImagePlaceholder(
+            image,
+            resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
+          ),
     );
   }
 
@@ -233,14 +248,9 @@ class MessageImageResourceDirective extends AsyncDirective {
     opts: ImageRenderOptions | undefined,
   ) {
     const title = img.alt?.trim() || t("chat.imageLightbox.untitled");
-    // Upscale genuinely tiny sources enough to read and operate without
-    // stretching every transcript image into a fixed-size tile.
-    const imageClass =
-      img.width !== undefined && img.width < MIN_CHAT_IMAGE_PREVIEW_WIDTH
-        ? "chat-message-image chat-message-image--small"
-        : "chat-message-image";
-    return html`
-      <span class="chat-image-frame ${this.managed ? "chat-image-frame--managed" : ""}">
+    return this.renderImageFrame(
+      img,
+      html`
         <button
           type="button"
           class="chat-message-image-button"
@@ -255,14 +265,69 @@ class MessageImageResourceDirective extends AsyncDirective {
             @error=${(event: Event) => this.onSettled(event, img.url)}
             src=${previewUrl}
             alt=${title}
-            class=${imageClass}
+            class="chat-message-image"
             width=${img.width ?? nothing}
             height=${img.height ?? nothing}
           />
         </button>
         ${this.managed ? renderManagedImageActions(img, opts) : nothing}
-      </span>
-    `;
+      `,
+    );
+  }
+
+  private renderImageFrame(img: ImageBlock, content: TemplateResult, loading = false) {
+    const sized =
+      Number.isFinite(img.width) &&
+      img.width! > 0 &&
+      Number.isFinite(img.height) &&
+      img.height! > 0;
+    const ratio = sized ? img.width! / img.height! : 3 / 2;
+    const width = sized
+      ? img.width! < MIN_CHAT_IMAGE_PREVIEW_WIDTH
+        ? MIN_CHAT_IMAGE_PREVIEW_WIDTH
+        : Math.min(img.width!, 400, 360 * ratio)
+      : 400;
+    const height = Math.min(360, width / ratio);
+    // Frame geometry survives metadata, fetch, and IMG decode. CSS gallery
+    // dimensions still override these single-image presentation values.
+    return html`<span
+      class="chat-image-frame chat-image-frame--image ${this.managed ? "chat-image-frame--managed" : ""}"
+      style=${`--chat-image-width: ${width}px; --chat-image-ratio: ${width} / ${height}`}
+      aria-busy=${loading ? "true" : "false"}
+      >${content}</span
+    >`;
+  }
+
+  private renderImagePlaceholder(image: ImageBlock, reason?: string) {
+    return this.renderImageFrame(
+      image,
+      html`<span class="chat-image-status" role="status">
+        ${icons.image}<span>${reason ?? t("common.loading")}</span>
+        ${
+          reason && this.managed
+            ? html`<button
+                type="button"
+                class="btn btn--sm"
+                @click=${() => {
+                  resolveManagedOutgoingImageResource(
+                    image.url,
+                    this.options?.onRequestUpdate
+                      ? { ...this.options, onRequestUpdate: this.requestUpdate }
+                      : this.options,
+                    image.artifactId,
+                    "thumbnail",
+                    true,
+                  );
+                  this.refreshImage();
+                }}
+              >
+                ${t("common.retry")}
+              </button>`
+            : nothing
+        }
+      </span>`,
+      reason === undefined,
+    );
   }
 
   private releaseRetainedImage() {
