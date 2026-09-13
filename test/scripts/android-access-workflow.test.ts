@@ -11,7 +11,7 @@ const step = job.steps.find(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function verifyReports(mode: string) {
+function verifyReports(mode: string, buildType: "Debug" | "Release" = "Debug") {
   const root = tempDirs.make("openclaw-access-reports-");
   const verification = step.run.split("python3 - <<'PY'\n")[1]?.split("\nPY")[0];
   if (!verification) {
@@ -25,7 +25,8 @@ function verifyReports(mode: string) {
 from pathlib import Path
 import json, os, sys, zipfile
 mode = sys.argv[1]
-reports = Path('apps/android/app/build/outputs/androidTest-results/connected/debug')
+build_type = os.environ['BUILD_TYPE']
+reports = Path('apps/android/app/build/outputs/androidTest-results/connected') / build_type.lower()
 reports.mkdir(parents=True)
 names = os.environ['ACCESS_NATIVE_TEST_CLASSES'].split(',')
 if mode == 'wrong-class': names[0] = 'OtherTest'
@@ -34,10 +35,10 @@ if mode == 'duplicate': names.append(names[0])
 child = '<failure/>' if mode == 'failed' else '<error/>' if mode == 'error' else '<skipped/>' if mode == 'skipped' else ''
 cases = '' if mode == 'empty' else ''.join(f'<testcase classname="{name}" name="native">{child}</testcase>' for name in names)
 (reports / 'TEST-device.xml').write_text(f'<testsuite>{cases}</testsuite>')
-apk = Path('apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk')
+apk = Path(f'apps/android/app/build/outputs/apk/play/{build_type.lower()}/openclaw-2099.1.2-play-{build_type.lower()}.apk')
 apk.parent.mkdir(parents=True)
 element = {'outputFile': '../outside.apk' if mode == 'outside-output' else apk.name, 'filters': []}
-metadata = {'variantName': 'thirdPartyDebug' if mode == 'wrong-variant' else 'playDebug',
+metadata = {'variantName': 'thirdPartyDebug' if mode == 'wrong-variant' else f'play{build_type}',
             'artifactType': {'type': 'APK'}, 'elements': [element, element] if mode == 'ambiguous-output' else [element]}
 (apk.parent / 'output-metadata.json').write_text(json.dumps(metadata))
 abis = ['armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64']
@@ -52,8 +53,11 @@ with zipfile.ZipFile(apk, 'w') as archive:
       encoding: "utf8",
       env: {
         ...process.env,
+        BUILD_TYPE: buildType,
         ACCESS_NATIVE_TEST_CLASSES:
-          "ai.openclaw.app.gateway.CloudflareAccessNativeTest,ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest",
+          buildType === "Release"
+            ? "ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest"
+            : "ai.openclaw.app.gateway.CloudflareAccessNativeTest,ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest",
       },
     },
   );
@@ -65,10 +69,10 @@ describe("Android Access native workflow", () => {
     expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job.if).toContain("run_android_job == 'true'");
     expect(job.if).toContain("compatibility_target != 'true'");
-    expect(step.run).toContain(":app:connectedPlayDebugAndroidTest");
+    expect(step.run).toContain(":app:connectedPlay${BUILD_TYPE}AndroidTest");
     expect(step.run).toContain('"$native_test_filter"');
     expect(step.run).toContain(
-      "export ACCESS_NATIVE_TEST_CLASSES=ai.openclaw.app.gateway.CloudflareAccessNativeTest,ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest",
+      'native_test_filter="-Pandroid.testInstrumentationRunnerArguments.class=$ACCESS_NATIVE_TEST_CLASSES"',
     );
     expect(step.run).toContain('zipalign" -c -P 16 -v 4');
     expect(step.run).toContain('zipalign" -c -P 16 -v 4 "$apk"');
@@ -108,13 +112,35 @@ describe("Android Access native workflow", () => {
     }
   });
 
+  it("uses the real minified release variant without adding test-only application keeps", () => {
+    expect(step.env.BUILD_TYPE).toBe("${{ matrix.build-type }}");
+    expect(step.run).toContain("androidComponents').finalizeDsl");
+    expect(step.run).toContain("dsl.testBuildType = 'release'");
+    expect(step.run).toContain(
+      '--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache',
+    );
+    expect(step.run).toContain("^> Task :app:minifyPlayReleaseWithR8$");
+    expect(step.run).toContain("outputs/mapping/playRelease/configuration.txt");
+    expect(step.run).toContain("CloudflareAccessPersistenceNativeTest");
+    const fixture = readFileSync(
+      "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessReleaseNativeTest.kt",
+      "utf8",
+    );
+    expect(fixture).toContain("ApplicationInfo.FLAG_DEBUGGABLE");
+    expect(fixture).toContain("Native.load(");
+    expect(fixture).toContain("CloudflareSodiumLibrary::class.java");
+    expect(fixture).not.toContain("CloudflareAccessBox");
+  });
+
   it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
     expect(job.strategy).toEqual({
       "fail-fast": false,
       matrix: {
         include: [
-          { "page-size": 4096, image: "google_apis" },
-          { "page-size": 16384, image: "google_apis_ps16k" },
+          { "page-size": 4096, image: "google_apis", "build-type": "Debug" },
+          { "page-size": 16384, image: "google_apis_ps16k", "build-type": "Debug" },
+          { "page-size": 4096, image: "google_apis", "build-type": "Release" },
+          { "page-size": 16384, image: "google_apis_ps16k", "build-type": "Release" },
         ],
       },
     });
@@ -125,7 +151,7 @@ describe("Android Access native workflow", () => {
     );
     const guard = step.run.slice(
       step.run.indexOf('test "$(adb -s emulator-5554 shell getconf PAGE_SIZE'),
-      step.run.indexOf("node --import ./scripts/tsx.mjs"),
+      step.run.indexOf("gradle_args=()"),
     );
     expect(guard).toContain("setprop bionic.linker.16kb.app_compat.enabled false");
     expect(guard).toContain("setprop pm.16kb.app_compat.disabled true");
@@ -156,13 +182,16 @@ ${guard}`,
     }
   });
 
-  it("accepts executed native crypto and persistence tests with all four packaged ABIs", () => {
-    const result = verifyReports("passed");
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "apps/android/app/build/outputs/apk/play/debug/openclaw-2099.1.2-play-debug.apk",
-    );
-  });
+  it.each(["Debug", "Release"] as const)(
+    "accepts executed %s native tests and all four packaged ABIs",
+    (buildType) => {
+      const result = verifyReports("passed", buildType);
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout.trim()).toBe(
+        `apps/android/app/build/outputs/apk/play/${buildType.toLowerCase()}/openclaw-2099.1.2-play-${buildType.toLowerCase()}.apk`,
+      );
+    },
+  );
 
   it.each([
     "empty",

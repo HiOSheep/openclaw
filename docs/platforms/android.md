@@ -39,6 +39,36 @@ capabilities; this prevents simultaneous Gateways from issuing camera,
 location, screen, or notification commands to the same phone. Android can
 suspend the secondary connections after the app leaves the foreground.
 
+## Cloudflare Access sign-in
+
+For an HTTPS Gateway protected by Cloudflare Access, scan its setup QR code or
+enter its address, then tap **Connect**. OpenClaw opens a browser tab when the
+Gateway requires an Access login. **After approving sign-in, close the browser
+tab to return to OpenClaw.** The app verifies the result and resumes the same
+connection; you do not need to scan or enter the credentials again.
+
+Returning before approval, pressing Home, or closing the tab does not cancel
+sign-in. Use **Cancel** in OpenClaw, or wait for the five-minute sign-in timeout.
+If browser launch fails, the app shows an error. Automatic reconnect never opens
+a browser; use the Gateway's **Sign in** action when its Access session expires.
+
+Access sign-in is separate from Gateway pairing, tokens, and passwords. Renewing
+Access preserves those credentials. If a QR setup deadline expires while you
+sign in, generate a new QR code and scan it. A Gateway rejection saying the
+bootstrap token is invalid also requires a fresh QR code; it can mean the token
+expired, was revoked, or was already used.
+
+Access sessions are shared by saved Gateways on the same HTTPS host and port.
+**Sign out** retires connections and media using that host's Access session.
+Gateways admitted through their own service headers or WARP remain independent.
+**Forget** removes one saved Gateway and its work; the Access session is deleted
+when no other saved Gateway owns it. Neither action signs out your browser or
+identity provider, so a later login may reuse the browser's existing account.
+
+Native chat and media use the verified Access session. Embedded Gateway pages
+that need browser sign-in show an actionable message instead of inheriting the
+native credential. Existing per-Gateway proxy headers continue to work.
+
 ## Wear OS companion
 
 The Wear OS companion uses the paired Android phone's authenticated Gateway connection; the watch never receives or stores Gateway credentials. It can select agents and sessions, read bounded transcripts, send text or dictated replies, abort an active run, start realtime Talk inside the selected session, and connect or disconnect the paired phone's Gateway. It also offers local reply notifications, dark or light appearance, and optional automatic speech for replies. Agent and Gateway controls are capability-negotiated for staggered phone/watch updates. Realtime Talk streams microphone and playback audio over a temporary Wear OS Data Layer channel and stops when the selected phone, Gateway connection, or audio channel is lost.

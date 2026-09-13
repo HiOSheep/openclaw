@@ -55,6 +55,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -280,6 +281,7 @@ class MainViewModel private constructor(
   savedStateHandle: SavedStateHandle,
   private val resolveShareMimeType: (Uri) -> String?,
   shareLaunchCapacity: Int,
+  private val gatewayConnectionDispatcher: CoroutineDispatcher,
 ) : AndroidViewModel(app) {
   constructor(
     app: Application,
@@ -290,6 +292,7 @@ class MainViewModel private constructor(
     savedStateHandle = savedStateHandle,
     resolveShareMimeType = app.contentResolver::getType,
     shareLaunchCapacity = MAX_PENDING_CHAT_SHARES,
+    gatewayConnectionDispatcher = Dispatchers.Default,
   )
 
   internal constructor(
@@ -298,12 +301,14 @@ class MainViewModel private constructor(
     savedStateHandle: SavedStateHandle,
     resolveShareMimeType: (Uri) -> String? = app.contentResolver::getType,
     shareLaunchCapacity: Int = MAX_PENDING_CHAT_SHARES,
+    gatewayConnectionDispatcher: CoroutineDispatcher = Dispatchers.Default,
   ) : this(
     app = app as Application,
     prefs = prefs,
     savedStateHandle = savedStateHandle,
     resolveShareMimeType = resolveShareMimeType,
     shareLaunchCapacity = shareLaunchCapacity,
+    gatewayConnectionDispatcher = gatewayConnectionDispatcher,
   )
 
   private val nodeApp = app as NodeApp
@@ -503,6 +508,30 @@ class MainViewModel private constructor(
   val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
+  internal val gatewayAccessPresentation =
+    runtimeState(
+      initial =
+        ai.openclaw.app.gateway
+          .GatewayAccessPresentation(),
+    ) { it.gatewayAccessPresentation }
+
+  internal fun consumeGatewayAccessBrowserLaunch(id: java.util.UUID): String? = runtimeRef.value?.consumeGatewayAccessBrowserLaunch(id)
+
+  internal fun cancelGatewayAccess(
+    id: java.util.UUID,
+    launchFailed: Boolean = false,
+  ) {
+    runtimeRef.value?.cancelGatewayAccess(id, launchFailed)
+  }
+
+  internal fun retryGatewayAccess() {
+    launchGatewayConnectionOperation { runtime, operation -> runtime.retryGatewayAccess(operation) }
+  }
+
+  internal fun signOutGatewayAccess(stableId: String) {
+    nodeApp.peekRuntime()?.signOutGatewayAccess(stableId)
+  }
+
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
     runtimeState(initial = null) { it.gatewayControlPage }
   val desktopObserveAvailable: StateFlow<Boolean> =
@@ -819,6 +848,7 @@ class MainViewModel private constructor(
               token = config.token.ifEmpty { null },
               bootstrapToken = config.bootstrapToken.ifEmpty { null },
               password = config.password.ifEmpty { null },
+              bootstrapExpiresAtMs = config.bootstrapExpiresAtMs,
             )
           } else {
             null
@@ -840,6 +870,7 @@ class MainViewModel private constructor(
             token = config.token,
             bootstrapToken = config.bootstrapToken,
             password = config.password,
+            bootstrapExpiresAtMs = config.bootstrapExpiresAtMs,
           )
         }
         prefs.gatewayRegistry.upsert(
@@ -1344,12 +1375,13 @@ class MainViewModel private constructor(
   }
 
   private fun launchGatewayConnectionOperation(action: suspend (NodeRuntime, NodeRuntime.GatewayConnectionOperation) -> Unit) {
+    val admissionCheckpoint = nodeApp.gatewayAccessAdmissionCheckpoint()
     val processIntent = resumeNodeServiceForConnection()
     val sequence = gatewayConfigOperationSeq.incrementAndGet()
     val isCurrent = { sequence == gatewayConfigOperationSeq.get() && processIntent() }
-    viewModelScope.launch(Dispatchers.Default) {
+    viewModelScope.launch(gatewayConnectionDispatcher) {
       val runtime = ensureRuntime()
-      val operation = runtime.beginGatewayConnectionOperation(isCurrent) ?: return@launch
+      val operation = runtime.beginGatewayConnectionOperation(admissionCheckpoint, isCurrent) ?: return@launch
       try {
         gatewayConfigOperationMutex.withLock {
           if (operation()) action(runtime, operation)

@@ -38,6 +38,7 @@ class AndroidLicenseNoticesTest {
       listOf(
         "Accompanist Drawable Painter",
         "AndroidSVG",
+        "AndroidX Browser",
         "AndroidX CameraX",
         "AndroidX Compose",
         "AndroidX Media3",

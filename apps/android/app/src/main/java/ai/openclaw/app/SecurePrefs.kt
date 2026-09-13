@@ -47,12 +47,14 @@ data class GatewayCredentials(
   val token: String? = null,
   val bootstrapToken: String? = null,
   val password: String? = null,
+  val bootstrapExpiresAtMs: Long? = null,
 ) {
   internal fun normalized(): GatewayCredentials =
     copy(
       token = token?.trim()?.takeIf { it.isNotEmpty() },
       bootstrapToken = bootstrapToken?.trim()?.takeIf { it.isNotEmpty() },
       password = password?.trim()?.takeIf { it.isNotEmpty() },
+      bootstrapExpiresAtMs = bootstrapExpiresAtMs?.takeIf { it > 0 && !bootstrapToken.isNullOrBlank() },
     )
 }
 
@@ -538,8 +540,9 @@ class SecurePrefs(
     token: String? = null,
     bootstrapToken: String? = null,
     password: String? = null,
+    bootstrapExpiresAtMs: Long? = null,
   ) {
-    saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password))
+    saveGatewayCredentials(stableId, GatewayCredentials(token, bootstrapToken, password, bootstrapExpiresAtMs))
   }
 
   fun clearGatewayCredentials(stableId: String) {
@@ -566,7 +569,7 @@ class SecurePrefs(
             gatewayCredentialRevisions[key] != revision -> false
             credentials.bootstrapToken == null -> true
             credentials.bootstrapToken != bootstrapToken.trim() -> false
-            else -> commitSecureStrings(mapOf(key to json.encodeToString(credentials.copy(bootstrapToken = null))))
+            else -> commitSecureStrings(mapOf(key to json.encodeToString(credentials.copy(bootstrapToken = null, bootstrapExpiresAtMs = null))))
           }
         }
       }

@@ -42,6 +42,9 @@ internal fun SessionDashboardScreen(
   onBack: () -> Unit,
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
+  val profiles by viewModel.pairedGateways.collectAsState()
+  val activeId by viewModel.activeGatewayStableId.collectAsState()
+  val accessProtected = profiles.any { it.stableId == activeId && it.accessOrigin != null }
   val controlPage by viewModel.gatewayControlPage.collectAsState()
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val sessionOwnerAgentId by viewModel.chatSessionOwnerAgentId.collectAsState()
@@ -115,7 +118,9 @@ internal fun SessionDashboardScreen(
           ) {
             Text(
               text =
-                if (isConnected && page != null) {
+                if (accessProtected) {
+                  nativeString("Use native chat for this Access-protected gateway")
+                } else if (isConnected && page != null) {
                   nativeString("Session dashboard unavailable")
                 } else {
                   nativeString("Dashboard needs a connected gateway")
@@ -125,7 +130,9 @@ internal fun SessionDashboardScreen(
             )
             Text(
               text =
-                if (isConnected && page != null) {
+                if (accessProtected) {
+                  nativeString("Browser dashboard sign-in is not available here yet. Return to native chat, or open Gateway settings to manage Access sign-in.")
+                } else if (isConnected && page != null) {
                   nativeString("Go back and select a session to open its dashboard.")
                 } else {
                   nativeString("Connect to your gateway to open this session dashboard.")

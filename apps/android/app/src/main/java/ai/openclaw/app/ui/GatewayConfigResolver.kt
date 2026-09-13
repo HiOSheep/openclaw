@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.longOrNull
 import java.net.URI
 import java.util.Base64
 import java.util.Locale
@@ -37,6 +38,7 @@ internal data class GatewaySetupCode(
   val bootstrapToken: String?,
   val token: String?,
   val password: String?,
+  val expiresAtMs: Long? = null,
 )
 
 /** Final gateway connection fields selected from setup-code or manual UI input. */
@@ -48,6 +50,7 @@ internal data class GatewayConnectConfig(
   val token: String,
   val password: String,
   val contextPath: String = "",
+  val bootstrapExpiresAtMs: Long? = null,
 )
 
 /** How a connection attempt may update credentials already owned by the runtime. */
@@ -141,6 +144,7 @@ internal fun resolveGatewayConnectConfig(
       tls = parsed.tls,
       contextPath = parsed.contextPath,
       bootstrapToken = setupBootstrapToken,
+      bootstrapExpiresAtMs = setup.expiresAtMs.takeIf { setupBootstrapToken.isNotEmpty() },
       token = sharedToken,
       password = sharedPassword,
     )
@@ -303,7 +307,11 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
     val bootstrapToken = jsonField(obj, "bootstrapToken")
     val token = jsonField(obj, "token")
     val password = jsonField(obj, "password")
-    GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password)
+    val expiresAtMs =
+      obj["expiresAtMs"]?.let { value ->
+        (value as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it > 0 } ?: return null
+      }
+    GatewaySetupCode(url = url, bootstrapToken = bootstrapToken, token = token, password = password, expiresAtMs = expiresAtMs)
   } catch (_: IllegalArgumentException) {
     null
   }

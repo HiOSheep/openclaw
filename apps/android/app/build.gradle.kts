@@ -435,6 +435,7 @@ dependencies {
   implementation(libs.androidx.core.ktx)
   // AppCompat owns per-app locale persistence and Activity recreation on API 31-32.
   implementation(libs.androidx.appcompat)
+  implementation(libs.androidx.browser)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.activity.compose)
   implementation(libs.androidx.webkit)

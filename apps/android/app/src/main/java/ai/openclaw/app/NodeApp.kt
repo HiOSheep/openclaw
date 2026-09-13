@@ -108,6 +108,8 @@ class NodeApp : Application() {
    */
   fun peekRuntime(): NodeRuntime? = synchronized(runtimeLock) { runtimeInstance }
 
+  internal fun gatewayAccessAdmissionCheckpoint(): Long = synchronized(runtimeLock) { runtimeInstance?.gatewayAccessAdmissionCheckpoint() ?: 0L }
+
   internal fun launchRuntimeTask(block: suspend () -> Unit) {
     runtimeScope.launch { block() }
   }

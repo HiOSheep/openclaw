@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -174,6 +176,18 @@ class MainActivity : AppCompatActivity() {
   private fun startViewModelCollectors(readyViewModel: MainViewModel) {
     if (didStartViewModelCollectors) return
     didStartViewModelCollectors = true
+
+    lifecycleScope.launch {
+      repeatOnLifecycle(Lifecycle.State.STARTED) {
+        readyViewModel.gatewayAccessPresentation.collect { presentation ->
+          val launch = presentation.browserLaunch ?: return@collect
+          val url = readyViewModel.consumeGatewayAccessBrowserLaunch(launch.attemptId) ?: return@collect
+          // Polling owns success; tab visibility and Activity recreation never complete or cancel it.
+          runCatching { CustomTabsIntent.Builder().build().launchUrl(this@MainActivity, url.toUri()) }
+            .onFailure { readyViewModel.cancelGatewayAccess(launch.attemptId, launchFailed = true) }
+        }
+      }
+    }
 
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) {

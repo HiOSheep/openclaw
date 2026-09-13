@@ -102,6 +102,10 @@ internal fun ChatInlineWidget(
   resolverReady: Boolean,
   resolveResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
 ) {
+  ai.openclaw.app.ui.LocalGatewayBrowserUnavailableReason.current?.let { reason ->
+    Text(reason, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+    return
+  }
   var resolvedResource by remember(preview.path) { mutableStateOf<ChatWidgetResource?>(null) }
   var unavailable by remember(preview.path) { mutableStateOf(false) }
   var recoveryAttempts by remember(preview.path) { mutableIntStateOf(0) }

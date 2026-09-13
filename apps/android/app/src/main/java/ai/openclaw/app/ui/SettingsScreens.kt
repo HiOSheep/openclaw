@@ -1796,6 +1796,10 @@ private fun GatewaySettingsScreen(
           SettingsMetric(nativeString("Instance ID"), instanceId, copyable = true),
         ),
     )
+    pairedGateways.firstOrNull { it.stableId == activeGatewayStableId && it.accessOrigin != null }?.let { entry ->
+      Text(nativeString("Signing out retires gateways using this host's Access session. Gateways with their own service credentials stay connected. Your browser may remain signed in."))
+      TextButton(onClick = { viewModel.signOutGatewayAccess(entry.stableId) }) { Text(nativeString("Sign out of Cloudflare Access")) }
+    }
     // First-run hero: no paired gateways yet, so pairing is the primary action.
     if (gatewayShowsScanHero(pairedGateways.size)) {
       ClawPrimaryButton(

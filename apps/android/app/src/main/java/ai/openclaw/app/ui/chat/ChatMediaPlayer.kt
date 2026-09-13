@@ -166,6 +166,11 @@ private object ChatInlineMediaSessionCallback : MediaSession.Callback {
   }
 }
 
+internal suspend fun retireGatewayMediaPlayback() =
+  kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main.immediate) {
+    ChatMediaPlaybackArbiter.retireAll()
+  }
+
 private object ChatMediaPlaybackArbiter {
   private data class AudioFocusHandle(
     val manager: AudioManager,
@@ -203,6 +208,12 @@ private object ChatMediaPlaybackArbiter {
   fun pauseAll() {
     playbackIntentGeneration += 1L
     claims.pauseIf { true }
+  }
+
+  @Synchronized
+  fun retireAll() {
+    playbackIntentGeneration += 1L
+    claims.releaseActive()
   }
 
   @Synchronized

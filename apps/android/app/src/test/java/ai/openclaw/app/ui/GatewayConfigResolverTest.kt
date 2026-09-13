@@ -10,6 +10,29 @@ import java.util.Base64
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
   @Test
+  fun setupDeadlineSurvivesDecodingAndPendingPlanWithoutReset() {
+    val deadline = 1800000123456L
+    val encoded =
+      Base64.getEncoder().encodeToString(
+        """{"url":"wss://gateway.example:443/path","bootstrapToken":"bootstrap","expiresAtMs":$deadline}""".toByteArray(),
+      )
+    assertEquals(deadline, decodeGatewaySetupCode(encoded)?.expiresAtMs)
+    val config = resolveGatewayConnectConfig(true, encoded, "", "", true, "", "", "")
+    assertEquals(deadline, config?.bootstrapExpiresAtMs)
+    assertEquals("/path", config?.contextPath)
+    val legacy = Base64.getEncoder().encodeToString("""{"url":"wss://gateway.example","bootstrapToken":"bootstrap"}""".toByteArray())
+    assertNull(decodeGatewaySetupCode(legacy)?.expiresAtMs)
+  }
+
+  @Test
+  fun setupDeadlineRejectsWrongTypeAndFractionalValues() {
+    for (value in listOf("\"1800000000000\"", "1.5", "-1")) {
+      val encoded = Base64.getEncoder().encodeToString("""{"url":"wss://gateway.example","expiresAtMs":$value}""".toByteArray())
+      assertNull(decodeGatewaySetupCode(encoded))
+    }
+  }
+
+  @Test
   fun insecureRemoteGuidanceRetainsTheCompleteSecurityRuleAndFix() {
     val message =
       gatewayEndpointValidationMessage(

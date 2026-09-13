@@ -20,6 +20,19 @@ class SecurePrefsTest {
     )
 
   @Test
+  fun bootstrapDeadlinePersistsUntilTheSameCredentialHandoffCompletes() {
+    val context = RuntimeEnvironment.getApplication()
+    val backing = context.getSharedPreferences("deadline-${UUID.randomUUID()}", Context.MODE_PRIVATE)
+    val prefs = SecurePrefs(context, backing)
+    val expected = GatewayCredentials(token = "token", bootstrapToken = "bootstrap", password = "password", bootstrapExpiresAtMs = 1800000000000L)
+    prefs.saveGatewayCredentials("gateway", expected)
+    val restored = SecurePrefs(context, backing)
+    assertEquals(expected, restored.loadGatewayCredentials("gateway"))
+    assertTrue(restored.prepareGatewayBootstrapHandoff("gateway", "bootstrap", false).complete())
+    assertEquals(expected.copy(bootstrapToken = null, bootstrapExpiresAtMs = null), restored.loadGatewayCredentials("gateway"))
+  }
+
+  @Test
   fun backgroundSettingsResolutionRequiresBothPermissionLevels() {
     assertEquals(
       LocationMode.Always,

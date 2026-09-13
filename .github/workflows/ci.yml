@@ -5738,8 +5738,16 @@ jobs:
         include:
           - page-size: 4096
             image: google_apis
+            build-type: Debug
           - page-size: 16384
             image: google_apis_ps16k
+            build-type: Debug
+          - page-size: 4096
+            image: google_apis
+            build-type: Release
+          - page-size: 16384
+            image: google_apis_ps16k
+            build-type: Release
     steps:
       - name: Checkout
         shell: bash
@@ -5773,6 +5781,7 @@ jobs:
         shell: bash
         env:
           EXPECTED_PAGE_SIZE: ${{ matrix.page-size }}
+          BUILD_TYPE: ${{ matrix.build-type }}
           SYSTEM_IMAGE: system-images;android-36;${{ matrix.image }};x86_64
         run: |
           set -euo pipefail
@@ -5800,14 +5809,45 @@ jobs:
             test "$(adb -s emulator-5554 shell getprop bionic.linker.16kb.app_compat.enabled | tr -d '\r')" = false
             test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
           fi
+          gradle_args=()
           export ACCESS_NATIVE_TEST_CLASSES=ai.openclaw.app.gateway.CloudflareAccessNativeTest,ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest
           # AGP 9.4 splits instrumentation values on commas; quote the exact regex for adb's remote shell.
           native_test_filter="-Pandroid.testInstrumentationRunnerArguments.tests_regex='^ai[.]openclaw[.]app[.]gateway[.](CloudflareAccessNativeTest#packagedSodiumLoadsAndDecryptsTheGoTransferVector|CloudflareAccessPersistenceNativeTest#encryptedGrantRestoresAndDeletesWithoutChangingGatewayPairing)$'"
+          if [[ "$BUILD_TYPE" == Release ]]; then
+            export ACCESS_NATIVE_TEST_CLASSES=ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest
+            native_test_filter="-Pandroid.testInstrumentationRunnerArguments.class=$ACCESS_NATIVE_TEST_CLASSES"
+            export ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_FILE="$RUNNER_TEMP/access-test.jks"
+            export ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD="$(openssl rand -hex 24)"
+            export ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD="$ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD"
+            export ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_ALIAS=access-test
+            keytool -genkeypair -noprompt -keystore "$ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_FILE" \
+              -storepass "$ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD" \
+              -keypass "$ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD" \
+              -alias access-test -keyalg RSA -keysize 2048 -validity 1 -dname 'CN=OpenClaw CI'
+            cat > "$RUNNER_TEMP/access-test.init.gradle" <<'GRADLE'
+          gradle.beforeProject { project ->
+            if (project.path == ':app') {
+              project.pluginManager.withPlugin('com.android.application') {
+                project.extensions.getByName('androidComponents').finalizeDsl { dsl ->
+                  dsl.testBuildType = 'release'
+                }
+              }
+            }
+          }
+          GRADLE
+            gradle_args+=(--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache)
+          fi
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            :app:connectedPlayDebugAndroidTest \
+            ":app:connectedPlay${BUILD_TYPE}AndroidTest" "${gradle_args[@]}" \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
             "$native_test_filter" \
-            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            -PopenclawBuildCommit="$(git rev-parse HEAD)" \
+            -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee "$RUNNER_TEMP/access-gradle.log"
+          if [[ "$BUILD_TYPE" == Release ]]; then
+            grep -Eq '^> Task :app:minifyPlayReleaseWithR8$' "$RUNNER_TEMP/access-gradle.log"
+            test -s apps/android/app/build/outputs/mapping/playRelease/mapping.txt
+            test -s apps/android/app/build/outputs/mapping/playRelease/configuration.txt
+          fi
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json
@@ -5821,10 +5861,12 @@ jobs:
           for expected in expected_classes:
               assert sum(case.get('classname') == expected for case in cases) == 1, f'Missing or duplicate native test: {expected}'
           assert all(case.find(tag) is None for case in cases for tag in ('failure', 'error', 'skipped')), 'A packaged native test failed or skipped'
-          directory = Path('apps/android/app/build/outputs/apk/play/debug')
+          build_type = os.environ['BUILD_TYPE']
+          assert build_type in ('Debug', 'Release')
+          directory = Path('apps/android/app/build/outputs/apk/play') / build_type.lower()
           metadata = json.loads((directory / 'output-metadata.json').read_text())
-          assert metadata['variantName'] == 'playDebug' and metadata['artifactType']['type'] == 'APK'
-          assert len(metadata['elements']) == 1, 'Expected one universal playDebug APK'
+          assert metadata['variantName'] == f'play{build_type}' and metadata['artifactType']['type'] == 'APK'
+          assert len(metadata['elements']) == 1, 'Expected one universal selected APK'
           element = metadata['elements'][0]
           filename = element['outputFile']
           assert not element['filters'] and Path(filename).name == filename and filename.endswith('.apk')
@@ -5841,10 +5883,12 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: android-access-native-${{ matrix.page-size }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          name: android-access-native-${{ matrix.build-type }}-${{ matrix.page-size }}-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
           path: |
             apps/android/app/build/outputs/androidTest-results/connected/**
             apps/android/app/build/reports/androidTests/connected/**
+            apps/android/app/build/outputs/mapping/playRelease/mapping.txt
+            apps/android/app/build/outputs/mapping/playRelease/configuration.txt
           if-no-files-found: error
           retention-days: 14
 

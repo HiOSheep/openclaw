@@ -113,6 +113,7 @@ internal fun gatewayStatusLooksLikePairing(statusText: String): Boolean {
 
 /** Maps structured gateway auth failures to the compact labels used by status surfaces. */
 internal fun gatewayAuthRecoveryLabel(problem: GatewayConnectionProblem?): String? {
+  if (problem?.code == "EXTERNAL_AUTH_REQUIRED") return nativeString("Sign in to Cloudflare Access")
   val kind =
     when (problem?.code) {
       "AUTH_BOOTSTRAP_TOKEN_INVALID" -> GatewayAuthRecoveryLabelKind.SETUP_CODE_EXPIRED

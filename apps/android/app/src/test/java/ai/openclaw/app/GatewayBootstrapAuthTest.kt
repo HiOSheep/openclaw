@@ -3,6 +3,11 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.gateway.CloudflareAccessApplication
+import ai.openclaw.app.gateway.CloudflareAccessClient
+import ai.openclaw.app.gateway.CloudflareAccessSession
+import ai.openclaw.app.gateway.CloudflareAccessSessionStore
+import ai.openclaw.app.gateway.CloudflareAccessTestTokens
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
@@ -10,6 +15,7 @@ import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayHelloSummary
+import ai.openclaw.app.gateway.GatewayIngressController
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewaySession
@@ -58,6 +64,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -157,6 +164,14 @@ class GatewayBootstrapAuthTest {
 
   private fun trackRuntime(runtime: NodeRuntime): NodeRuntime =
     runtime.also {
+      // These fixtures own Gateway/TLS behavior. Ordinary ingress is explicit;
+      // Access-specific cases replace this same request dependency below.
+      val clientForRoute: (GatewayEndpoint, GatewayTlsParams) -> CloudflareAccessClient = { _, _ ->
+        CloudflareAccessClient { request, _, _ ->
+          CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), byteArrayOf())
+        }
+      }
+      writeField(gatewayIngress(it), "clientForRoute", clientForRoute)
       runtimes +=
         RuntimeFixture(
           it,
@@ -165,6 +180,475 @@ class GatewayBootstrapAuthTest {
             .toList(),
         )
     }
+
+  private fun gatewayIngress(runtime: NodeRuntime): GatewayIngressController = readField<Lazy<GatewayIngressController>>(runtime, "gatewayIngress\$delegate").value
+
+  @Test
+  fun accessRenewalResumesTheCurrentOperationWithoutResettingPairing() = drainWithMainLooper { verifyAccessRecovery("renew") }
+
+  @Test
+  fun refreshingTheActiveGatewayDoesNotRedirectToAnotherGatewaysAccessAttention() =
+    drainWithMainLooper {
+      val (_, prefs, runtime) = gatewayFixture { _, _ -> GatewayTlsProbeResult("ab".repeat(32), systemTrusted = true) }
+      neutralizeColdStartAutoConnect(runtime)
+      val active = GatewayEndpoint.manual("ordinary.example.test", 8443, true)
+      val other = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(active, null))
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(other, null))
+      prefs.gatewayRegistry.setActive(active.stableId)
+      prefs.saveGatewayCredentials(active.stableId, token = "preserved-gateway-token")
+      installStalledTransport(readField(runtime, "nodeSession"), completeCancellation = true)
+      installStalledTransport(readField(runtime, "operatorSession"), completeCancellation = true)
+      runtime.connect(active, auth(token = "preserved-gateway-token"))
+      withTimeout(5_000) { while (desiredConnection(runtime, "nodeSession") == null) delay(1) }
+      val previous = desiredConnection(runtime, "nodeSession")
+      installAccessClient(runtime)
+      val ingress = gatewayIngress(runtime)
+      assertTrue(
+        runCatching {
+          ingress.prepare(other, GatewayTlsParams(true, null, false, other.stableId), false, ingress.admissionCheckpoint()) { true }
+        }.exceptionOrNull() is ai.openclaw.app.gateway.GatewayExternalAuthorizationException,
+      )
+      var otherProbes = 0
+      val clientForRoute: (GatewayEndpoint, GatewayTlsParams) -> CloudflareAccessClient = { target, _ ->
+        CloudflareAccessClient { request, _, _ ->
+          if (target.stableId == other.stableId) otherProbes++
+          CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), byteArrayOf())
+        }
+      }
+      writeField(ingress, "clientForRoute", clientForRoute)
+      runtime.refreshGatewayConnection()
+      withTimeout(5_000) {
+        while (desiredConnection(runtime, "nodeSession") == null || desiredConnection(runtime, "nodeSession") === previous) delay(1)
+      }
+      val refreshed = checkNotNull(desiredConnection(runtime, "nodeSession"))
+      assertEquals(active.stableId, readField<GatewayEndpoint>(refreshed, "endpoint").stableId)
+      assertEquals(0, otherProbes)
+      assertNull(runtime.gatewayAccessPresentation.value.browserLaunch)
+      assertEquals(
+        other.stableId,
+        runtime.gatewayAccessPresentation.value.attention
+          ?.stableId,
+      )
+    }
+
+  @Test
+  fun stopDuringAccessRenewalPreventsTheCompletedGrantFromReconnecting() = drainWithMainLooper { verifyAccessRecovery("stop") }
+
+  @Test
+  fun switchDuringAccessRenewalRetainsTheReplacementTarget() = drainWithMainLooper { verifyAccessRecovery("switch") }
+
+  @Test
+  fun setupDeadlineElapsedDuringBrowserSignInRequiresRescanBeforeAnyGatewayHandoff() = drainWithMainLooper { verifyAccessRecovery("expired setup") }
+
+  @Test
+  fun setupReplacementWaitingForAuthDrainCannotRenewSignedOutAdmission() =
+    drainWithMainLooper {
+      val (_, prefs, runtime) = gatewayFixture { _, _ -> GatewayTlsProbeResult("ab".repeat(32), systemTrusted = true) }
+      neutralizeColdStartAutoConnect(runtime)
+      val endpoint = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.gatewayRegistry.setAccessOrigin(endpoint.stableId, CloudflareAccessTestTokens.application.origin)
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
+      installAccessClient(runtime)
+      val drained = CompletableDeferred<Unit>()
+      writeField(runtime, "gatewayConnectOperationsDrained", drained)
+      val operation = checkNotNull(runtime.beginGatewayConnectionOperation { true })
+      val deadline = System.currentTimeMillis() + 60_000
+      val replacement =
+        CoroutineScope(currentCoroutineContext()).async {
+          runtime.configureGatewayAndConnect(
+            endpoint,
+            auth(bootstrapToken = "test-only-setup").copy(bootstrapExpiresAtMs = deadline),
+            operation,
+            replaceAuth = true,
+            clearComposer = {},
+            persistConfig = {},
+          )
+        }
+      try {
+        withTimeout(5_000) { while (!readField<Boolean>(runtime, "gatewayAuthResetInProgress")) delay(1) }
+        runtime.signOutGatewayAccess(endpoint.stableId)
+        drained.complete(Unit)
+        withTimeout(5_000) { replacement.await() }
+        val preparation =
+          withTimeout(5_000) {
+            while (readField<Job?>(runtime, "ingressPreparation") == null) delay(1)
+            checkNotNull(readField<Job?>(runtime, "ingressPreparation"))
+          }
+        withTimeout(5_000) { preparation.join() }
+        val attempt = checkNotNull(readField<MutableStateFlow<Any?>>(runtime, "acceptedConnectAttempt").value)
+        assertEquals(deadline, readField<NodeRuntime.GatewayConnectAuth>(attempt, "pendingAuth").bootstrapExpiresAtMs)
+        assertNull(runtime.gatewayAccessPresentation.value.browserLaunch)
+        assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(desiredConnection(runtime, "operatorSession"))
+      } finally {
+        drained.complete(Unit)
+        replacement.cancelAndJoin()
+      }
+    }
+
+  @Test
+  fun queuedFleetAdmissionCannotBorrowRenewalAndStillAdmitsOrdinarySibling() =
+    drainWithMainLooper {
+      val (_, prefs, runtime) = gatewayFixture()
+      neutralizeColdStartAutoConnect(runtime)
+      val managed = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+      val ordinary = gatewayEndpoint()
+      val active = GatewayEndpoint.manual("active.example.test", 8443, true)
+      for (endpoint in listOf(managed, ordinary, active)) prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.gatewayRegistry.setActive(active.stableId)
+      prefs.gatewayRegistry.setAccessOrigin(managed.stableId, CloudflareAccessTestTokens.application.origin)
+      prefs.saveGatewayCredentials(managed.stableId, token = "preserved-managed-token")
+      prefs.saveGatewayCredentials(ordinary.stableId, token = "preserved-ordinary-token")
+      prefs.saveGatewayTlsFingerprint(managed.stableId, "ab".repeat(32))
+      runtime.setGatewayConnectionEnabled(managed.stableId, true)
+      runtime.setGatewayConnectionEnabled(ordinary.stableId, true)
+      installAccessClient(runtime)
+      gatewayServer.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+      val ingress = gatewayIngress(runtime)
+      val checkpoint = ingress.admissionCheckpoint()
+      // Canceling the startup consumeAsFlow collector also closes its channel.
+      // Install its fixture queue after joining that consumer, then use the carried value.
+      val requests = kotlinx.coroutines.channels.Channel<Long>(kotlinx.coroutines.channels.Channel.CONFLATED)
+      writeField(runtime, "backgroundGatewayReconciliations", requests)
+      NodeRuntime::class.java
+        .getDeclaredMethod("requestBackgroundGatewayReconciliation", java.lang.Long.TYPE)
+        .apply { isAccessible = true }
+        .invoke(runtime, checkpoint)
+      val queuedCheckpoint = requests.receive()
+      assertEquals(checkpoint, queuedCheckpoint)
+      val switchMutex = readField<Mutex>(runtime, "gatewaySwitchMutex")
+      switchMutex.lock()
+      val queued =
+        CoroutineScope(currentCoroutineContext()).async(start = CoroutineStart.UNDISPATCHED) {
+          kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn<Any?> { continuation ->
+            NodeRuntime::class.java
+              .getDeclaredMethod("reconcileBackgroundGatewayFleet", java.lang.Long.TYPE, kotlin.coroutines.Continuation::class.java)
+              .apply { isAccessible = true }
+              .invoke(runtime, queuedCheckpoint, continuation)
+          }
+        }
+      try {
+        assertFalse(queued.isCompleted)
+        ingress.signOut(managed.stableId)?.await()
+        val store = readField<CloudflareAccessSessionStore>(ingress, "store")
+        val authenticate: suspend (CloudflareAccessApplication, suspend (String) -> Unit) -> CloudflareAccessSession = { _, _ -> CloudflareAccessTestTokens.session() }
+        writeField(store, "authenticate", authenticate)
+        store.signIn(CloudflareAccessTestTokens.application) {}.await()
+      } finally {
+        switchMutex.unlock()
+      }
+      withTimeout(5_000) { queued.await() }
+      val fleet = readField<Map<String, Any>>(runtime, "secondaryOperatorSessions")
+      assertFalse(fleet.containsKey(managed.stableId))
+      assertTrue(fleet.containsKey(ordinary.stableId))
+      assertNull(runtime.gatewayAccessPresentation.value.browserLaunch)
+    }
+
+  @OptIn(ExperimentalCoroutinesApi::class)
+  @Test
+  fun viewModelQueuedBeforeRuntimeReservationKeepsTheProcessAdmissionCheckpoint() =
+    drainWithMainLooper {
+      val (app, prefs, runtime) = gatewayFixture { _, _ -> GatewayTlsProbeResult("ab".repeat(32), systemTrusted = true) }
+      neutralizeColdStartAutoConnect(runtime)
+      val process = app as NodeApp
+      val original = process.peekRuntime()
+      val endpoint = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.gatewayRegistry.setActive(endpoint.stableId)
+      prefs.gatewayRegistry.setAccessOrigin(endpoint.stableId, CloudflareAccessTestTokens.application.origin)
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
+      installAccessClient(runtime)
+      val scheduler = TestCoroutineScheduler()
+      val models = androidx.lifecycle.ViewModelStore()
+      writeField(process, "runtimeInstance", runtime)
+      val model = MainViewModel(process, prefs, androidx.lifecycle.SavedStateHandle(), gatewayConnectionDispatcher = StandardTestDispatcher(scheduler))
+      models.put("queued-access-test", model)
+      try {
+        val checkpoint = runtime.gatewayAccessAdmissionCheckpoint()
+        model.connect(endpoint, "preserved-gateway-token", null, null)
+        assertNull(readField<Any?>(runtime, "gatewayConnectionOperation"))
+        // The Activity has no runtimeRef yet; Sign out must use the process owner.
+        model.signOutGatewayAccess(endpoint.stableId)
+        scheduler.runCurrent()
+        val preparation =
+          withTimeout(5_000) {
+            while (readField<Job?>(runtime, "ingressPreparation") == null) {
+              scheduler.runCurrent()
+              delay(1)
+            }
+            checkNotNull(readField<Job?>(runtime, "ingressPreparation"))
+          }
+        withTimeout(5_000) { preparation.join() }
+        val attempt = checkNotNull(readField<MutableStateFlow<Any?>>(runtime, "acceptedConnectAttempt").value)
+        assertEquals(checkpoint, readField<Long>(attempt, "admissionCheckpoint"))
+        assertNull(runtime.gatewayAccessPresentation.value.browserLaunch)
+        assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(desiredConnection(runtime, "operatorSession"))
+      } finally {
+        models.clear()
+        scheduler.runCurrent()
+        writeField(process, "runtimeInstance", original)
+      }
+    }
+
+  @Test
+  fun directConnectWaitingForLifecycleLockKeepsItsOriginalAdmissionCheckpoint() = verifyDirectAccessBeforeLifecycleLock("connect")
+
+  @Test
+  fun directRefreshWaitingForLifecycleLockKeepsItsOriginalAdmissionCheckpoint() = verifyDirectAccessBeforeLifecycleLock("refresh")
+
+  @Test
+  fun directSwitchWaitingForLifecycleLockKeepsItsOriginalAdmissionCheckpoint() = verifyDirectAccessBeforeLifecycleLock("switch")
+
+  private fun verifyDirectAccessBeforeLifecycleLock(action: String) =
+    drainWithMainLooper {
+      val (_, prefs, runtime) = gatewayFixture { _, _ -> GatewayTlsProbeResult("ab".repeat(32), systemTrusted = true) }
+      neutralizeColdStartAutoConnect(runtime)
+      val endpoint = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+      prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+      prefs.gatewayRegistry.setActive(endpoint.stableId)
+      prefs.saveGatewayCredentials(endpoint.stableId, token = "preserved-gateway-token")
+      prefs.gatewayRegistry.setAccessOrigin(endpoint.stableId, CloudflareAccessTestTokens.application.origin)
+      prefs.saveGatewayTlsFingerprint(endpoint.stableId, "ab".repeat(32))
+      installAccessClient(runtime)
+      val checkpoint = runtime.gatewayAccessAdmissionCheckpoint()
+      val entered = CountDownLatch(1)
+      val release = CountDownLatch(1)
+      val holder =
+        Thread {
+          synchronized(readField<Any>(runtime, "gatewayLifecycleIntentLock")) {
+            entered.countDown()
+            check(release.await(5, TimeUnit.SECONDS))
+          }
+        }
+      val request =
+        java.util.concurrent.FutureTask {
+          when (action) {
+            "connect" -> runtime.connect(endpoint, auth(token = "preserved-gateway-token"))
+            "refresh" -> runtime.refreshGatewayConnection()
+            "switch" -> runBlocking { runtime.switchToGateway(endpoint.stableId) }
+            else -> error("Unexpected direct connection action")
+          }
+        }
+      val caller = Thread(request)
+      holder.start()
+      try {
+        assertTrue(entered.await(5, TimeUnit.SECONDS))
+        caller.start()
+        withTimeout(5_000) { while (caller.state != Thread.State.BLOCKED) delay(1) }
+        runtime.signOutGatewayAccess(endpoint.stableId)
+        release.countDown()
+        request.get(5, TimeUnit.SECONDS)
+        val preparation =
+          withTimeout(5_000) {
+            while (readField<Job?>(runtime, "ingressPreparation") == null) delay(1)
+            checkNotNull(readField<Job?>(runtime, "ingressPreparation"))
+          }
+        withTimeout(5_000) { preparation.join() }
+        val attempt = checkNotNull(readField<MutableStateFlow<Any?>>(runtime, "acceptedConnectAttempt").value)
+        assertEquals(checkpoint, readField<Long>(attempt, "admissionCheckpoint"))
+        assertNull(runtime.gatewayAccessPresentation.value.browserLaunch)
+        assertNull(desiredConnection(runtime, "nodeSession"))
+      } finally {
+        release.countDown()
+        holder.join(5_000)
+        caller.join(5_000)
+      }
+    }
+
+  @Test
+  fun accessSignOutBeforeTlsCompletionRejectsTheOriginalManagedIntent() = verifyAccessSignOutBeforeTls(false, false)
+
+  @Test
+  fun accessSignOutBeforeTrustAcceptanceDoesNotMintFreshAuthority() = verifyAccessSignOutBeforeTls(false, true)
+
+  @Test
+  fun accessSignOutBeforeTlsCompletionPreservesOrdinaryAdmission() = verifyAccessSignOutBeforeTls(true, false)
+
+  private fun verifyAccessSignOutBeforeTls(
+    ordinary: Boolean,
+    requireTrust: Boolean,
+  ) = drainWithMainLooper {
+    val entered = CompletableDeferred<Job>()
+    val release = CompletableDeferred<Unit>()
+    val fingerprint = "ab".repeat(32)
+    val (_, prefs, runtime) =
+      gatewayFixture { _, _ ->
+        entered.complete(currentCoroutineContext().job)
+        release.await()
+        GatewayTlsProbeResult(fingerprint, systemTrusted = !requireTrust)
+      }
+    neutralizeColdStartAutoConnect(runtime)
+    val endpoint = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    prefs.gatewayRegistry.setAccessOrigin(endpoint.stableId, CloudflareAccessTestTokens.application.origin)
+    if (!requireTrust) prefs.saveGatewayTlsFingerprint(endpoint.stableId, fingerprint)
+    installStalledTransport(readField(runtime, "nodeSession"), completeCancellation = true)
+    installStalledTransport(readField(runtime, "operatorSession"), completeCancellation = true)
+    installAccessClient(runtime, ordinary)
+    val ingress = gatewayIngress(runtime)
+    val store = readField<CloudflareAccessSessionStore>(ingress, "store")
+    val checkpoint = ingress.admissionCheckpoint()
+    val prompts = AtomicInteger()
+    val authenticate: suspend (CloudflareAccessApplication, suspend (String) -> Unit) -> CloudflareAccessSession = { _, open ->
+      prompts.incrementAndGet()
+      open("https://example.cloudflareaccess.com/login")
+      CloudflareAccessTestTokens.session()
+    }
+    writeField(store, "authenticate", authenticate)
+    try {
+      runtime.connect(endpoint, auth(token = "preserved-gateway-token"))
+      val probe = withTimeout(5_000) { entered.await() }
+      runtime.signOutGatewayAccess(endpoint.stableId)
+      assertTrue(runCatching { store.requireAdmission(CloudflareAccessTestTokens.application.origin, checkpoint) }.exceptionOrNull() is kotlinx.coroutines.CancellationException)
+      release.complete(Unit)
+      withTimeout(5_000) { probe.join() }
+      if (requireTrust) {
+        val prompt = withTimeout(5_000) { runtime.pendingGatewayTrust.first { it != null } }
+        runtime.acceptGatewayTrustPrompt(checkNotNull(prompt))
+      }
+      val preparation =
+        withTimeout(5_000) {
+          while (readField<Job?>(runtime, "ingressPreparation") == null) delay(1)
+          checkNotNull(readField<Job?>(runtime, "ingressPreparation"))
+        }
+      withTimeout(5_000) { preparation.join() }
+      assertEquals(0, prompts.get())
+      assertNull(runtime.gatewayAccessPresentation.value.browserLaunch)
+      if (ordinary) {
+        withTimeout(5_000) { while (desiredConnection(runtime, "nodeSession") == null) delay(1) }
+      } else {
+        assertNull(desiredConnection(runtime, "nodeSession"))
+        assertNull(desiredConnection(runtime, "operatorSession"))
+        runtime.retryGatewayAccess()
+        withTimeout(5_000) { while (desiredConnection(runtime, "nodeSession") == null) delay(1) }
+        assertEquals(1, prompts.get())
+      }
+    } finally {
+      release.complete(Unit)
+    }
+  }
+
+  private fun installAccessClient(
+    runtime: NodeRuntime,
+    ordinary: Boolean = false,
+  ) {
+    val ingress = gatewayIngress(runtime)
+    val application = CloudflareAccessTestTokens.application
+    val clientForRoute: (GatewayEndpoint, GatewayTlsParams) -> CloudflareAccessClient = { _, _ ->
+      CloudflareAccessClient { request, _, _ ->
+        when {
+          request.url.host == application.issuer.host -> {
+            CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), CloudflareAccessTestTokens.jwks)
+          }
+
+          request.method == "HEAD" -> {
+            CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().add("Cf-Access-Metadata", CloudflareAccessTestTokens.metadata()).build(), byteArrayOf())
+          }
+
+          ordinary || request.header("Cf-Access-Token") != null -> {
+            CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), byteArrayOf())
+          }
+
+          else -> {
+            CloudflareAccessClient.Reply(request.url.toString(), 302, Headers.Builder().add("WWW-Authenticate", "Cloudflare-Access resource_metadata=\"${application.origin.uri}/.well-known/cloudflare-access-protected-resource\"").build(), byteArrayOf())
+          }
+        }
+      }
+    }
+    writeField(ingress, "clientForRoute", clientForRoute)
+  }
+
+  private suspend fun verifyAccessRecovery(action: String) {
+    val (_, prefs, runtime) = gatewayFixture { _, _ -> GatewayTlsProbeResult("ab".repeat(32), systemTrusted = true) }
+    neutralizeColdStartAutoConnect(runtime)
+    val endpoint = GatewayEndpoint.manual("gateway.example.test", 8443, true)
+    prefs.gatewayRegistry.upsert(gatewayRegistryEntry(endpoint, null))
+    prefs.gatewayRegistry.setActive(endpoint.stableId)
+    prefs.saveGatewayCredentials(endpoint.stableId, token = "preserved-gateway-token")
+    val node = readField<GatewaySession>(runtime, "nodeSession")
+    val operator = readField<GatewaySession>(runtime, "operatorSession")
+    installStalledTransport(node, completeCancellation = true)
+    installStalledTransport(operator, completeCancellation = true)
+    val ingress = gatewayIngress(runtime)
+    val application = CloudflareAccessTestTokens.application
+    installAccessClient(runtime)
+    val approved = CompletableDeferred<CloudflareAccessSession>()
+    val authenticate: suspend (CloudflareAccessApplication, suspend (String) -> Unit) -> CloudflareAccessSession = { _, open ->
+      open("https://example.cloudflareaccess.com/login")
+      approved.await()
+    }
+    writeField(readField<Any>(ingress, "store"), "authenticate", authenticate)
+    if (action == "expired setup") {
+      val deadline = System.currentTimeMillis() + 250
+      runtime.connect(endpoint, auth(bootstrapToken = "test-only-setup-token").copy(bootstrapExpiresAtMs = deadline))
+      withTimeout(5_000) { runtime.gatewayAccessPresentation.first { it.browserLaunch != null } }
+      assertNull(desiredConnection(runtime, "nodeSession"))
+      assertNull(desiredConnection(runtime, "operatorSession"))
+      // Hold the browser result until the original absolute issuer deadline passes.
+      withTimeout(5_000) { while (System.currentTimeMillis() <= deadline) delay(1) }
+      approved.complete(CloudflareAccessTestTokens.session())
+      withTimeout(5_000) {
+        while (!runtime.gatewayConnectionDisplay.value.statusText
+            .contains("Scan a new QR")
+        ) {
+          delay(1)
+        }
+      }
+      assertNull(desiredConnection(runtime, "nodeSession"))
+      assertNull(desiredConnection(runtime, "operatorSession"))
+      assertEquals("preserved-gateway-token", prefs.loadGatewayCredentials(endpoint.stableId).token)
+      return
+    }
+    assertTrue(CloudflareAccessSessionStore.Persistence.securePrefs(prefs).save(application.origin, CloudflareAccessTestTokens.session().encode()))
+    runtime.connect(endpoint, auth(token = "preserved-gateway-token"))
+    withTimeout(5_000) { while (desiredConnection(runtime, "nodeSession") == null) delay(1) }
+    ingress.signOut(endpoint.stableId)?.await()
+    assertNull(desiredConnection(runtime, "nodeSession"))
+    runtime.retryGatewayAccess()
+    withTimeout(5_000) { runtime.gatewayAccessPresentation.first { it.browserLaunch != null } }
+    val replacement = gatewayEndpoint()
+    when (action) {
+      "stop" -> {
+        runtime.disconnect()
+      }
+
+      "switch" -> {
+        prefs.gatewayRegistry.upsert(gatewayRegistryEntry(replacement, null))
+        runtime.connect(replacement, auth(token = "replacement-token"))
+      }
+    }
+    approved.complete(CloudflareAccessTestTokens.session("renewed-access-account"))
+    withTimeout(5_000) { runtime.gatewayAccessPresentation.first { it.browserLaunch == null } }
+    when (action) {
+      "renew" -> {
+        withTimeout(5_000) { while (desiredConnection(runtime, "nodeSession") == null) delay(1) }
+        val desired = checkNotNull(desiredConnection(runtime, "nodeSession"))
+        assertEquals(endpoint.stableId, readField<GatewayEndpoint>(desired, "endpoint").stableId)
+        assertEquals("preserved-gateway-token", readField<String?>(desired, "token"))
+      }
+
+      "stop" -> {
+        assertNull(desiredConnection(runtime, "nodeSession"))
+      }
+
+      "switch" -> {
+        for (role in listOf("nodeSession", "operatorSession")) {
+          val desired =
+            withTimeout(5_000) {
+              while (desiredConnection(runtime, role)?.let { readField<GatewayEndpoint>(it, "endpoint").stableId } != replacement.stableId) delay(1)
+              checkNotNull(desiredConnection(runtime, role))
+            }
+          assertEquals(replacement.stableId, readField<GatewayEndpoint>(desired, "endpoint").stableId)
+          assertEquals("replacement-token", readField<String?>(desired, "token"))
+        }
+      }
+    }
+    assertEquals("preserved-gateway-token", prefs.loadGatewayCredentials(endpoint.stableId).token)
+  }
 
   private fun gatewayEndpoint(): GatewayEndpoint = GatewayEndpoint.manual("127.0.0.1", gatewayServer.port)
 
@@ -1076,7 +1560,11 @@ class GatewayBootstrapAuthTest {
       val oldSelection = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
       val original = waitForDesiredConnection(runtime, "nodeSession")
       runtime.refreshGatewayConnection()
-      val refreshed = waitForDesiredConnection(runtime, "nodeSession")
+      val refreshed =
+        withTimeout(500) {
+          while (desiredConnection(runtime, "nodeSession").let { it == null || it === original }) delay(1)
+          checkNotNull(desiredConnection(runtime, "nodeSession"))
+        }
       assertFalse("Explicit refresh must replace the desired connection", original === refreshed)
       val freshSelection = runtime.switchToGateway(endpoint.stableId) as GatewayTargetSelection.Selected
       assertSame("Selecting the refreshed target must reuse its connection", refreshed, desiredConnection(runtime, "nodeSession"))
@@ -1396,12 +1884,14 @@ class GatewayBootstrapAuthTest {
     val endpoint = gatewayEndpoint()
     runBlocking { assertTrue(runtime.connectSwitchingGateway(endpoint)) }
     val selection = runBlocking { runtime.switchToGateway(endpoint.stableId) } as GatewayTargetSelection.Selected
+    val initialDesired = waitForDesiredConnection(runtime, "nodeSession")
 
     runtime.setCameraEnabled(true)
 
+    val cameraDesired = waitForDesiredConnection(runtime, "nodeSession", initialDesired)
     val cameraOptions =
       readField<GatewayConnectOptions>(
-        waitForDesiredConnection(runtime, "nodeSession"),
+        cameraDesired,
         "options",
       )
     assertTrue(cameraOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
@@ -1411,7 +1901,7 @@ class GatewayBootstrapAuthTest {
 
     val locationOptions =
       readField<GatewayConnectOptions>(
-        waitForDesiredConnection(runtime, "nodeSession"),
+        waitForDesiredConnection(runtime, "nodeSession", cameraDesired),
         "options",
       )
     assertTrue(locationOptions.commands.contains(OpenClawCameraCommand.Snap.rawValue))
@@ -1810,7 +2300,12 @@ class GatewayBootstrapAuthTest {
           }
         if (selectedEndpoint != null) {
           assertEquals(selectedEndpoint.stableId, prefs.gatewayRegistry.activeStableId.value)
-          assertEquals(selectedEndpoint, readField<GatewayEndpoint>(requireNotNull(desiredConnection(runtime, "nodeSession")), "endpoint"))
+          val desired =
+            withTimeout(5_000) {
+              while (desiredConnection(runtime, "nodeSession")?.let { readField<GatewayEndpoint>(it, "endpoint") } != selectedEndpoint) delay(1)
+              checkNotNull(desiredConnection(runtime, "nodeSession"))
+            }
+          assertEquals(selectedEndpoint, readField<GatewayEndpoint>(desired, "endpoint"))
         } else {
           assertNull(desiredConnection(runtime, "nodeSession"))
           assertNull(readField<GatewayEndpoint?>(runtime, "connectedEndpoint"))
@@ -1844,6 +2339,9 @@ class GatewayBootstrapAuthTest {
       try {
         val first = withTimeout(5_000) { runtime.switchToGateway(endpoint.stableId) }
         assertTrue(first is GatewayTargetSelection.Selected)
+        if (!tlsPending) {
+          withTimeout(5_000) { while (readField<GatewayEndpoint?>(runtime, "connectedEndpoint") != endpoint) delay(1) }
+        }
         assertEquals(endpoint, readField<GatewayEndpoint?>(runtime, if (tlsPending) "connectingEndpoint" else "connectedEndpoint"))
         discovered.value = emptyList()
         val repeated = withTimeout(5_000) { runtime.switchToGateway(endpoint.stableId) }
@@ -2640,7 +3138,10 @@ class GatewayBootstrapAuthTest {
     val cancelled: CompletableDeferred<Unit> = CompletableDeferred(),
   )
 
-  private fun installStalledTransport(session: GatewaySession): StalledGatewayTransport {
+  private fun installStalledTransport(
+    session: GatewaySession,
+    completeCancellation: Boolean = false,
+  ): StalledGatewayTransport {
     val stalled = StalledGatewayTransport()
     val factory: (OkHttpClient, Request, WebSocketListener) -> WebSocket =
       { _, request, listener ->
@@ -2661,6 +3162,7 @@ class GatewayBootstrapAuthTest {
 
             override fun cancel() {
               stalled.cancelled.complete(Unit)
+              if (completeCancellation) listener.onFailure(this, IOException("Canceled test transport"), null)
             }
           }
         stalled.created.complete(socket to listener)
@@ -2713,9 +3215,10 @@ class GatewayBootstrapAuthTest {
   private fun waitForDesiredConnection(
     runtime: NodeRuntime,
     sessionFieldName: String,
+    previous: Any? = null,
   ): Any {
     repeat(50) {
-      desiredConnection(runtime, sessionFieldName)?.let { return it }
+      desiredConnection(runtime, sessionFieldName)?.takeUnless { it === previous }?.let { return it }
       Thread.sleep(10)
     }
     error("Expected desired connection for $sessionFieldName")

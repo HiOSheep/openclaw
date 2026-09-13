@@ -38,6 +38,8 @@ import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.parseSessionDiff
+import ai.openclaw.app.gateway.CloudflareAccessOrigin
+import ai.openclaw.app.gateway.CloudflareAccessSessionStore
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -45,6 +47,8 @@ import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
 import ai.openclaw.app.gateway.GatewayDiscovery
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayEvent
+import ai.openclaw.app.gateway.GatewayExternalAuthorizationException
+import ai.openclaw.app.gateway.GatewayIngressController
 import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayMethod
 import ai.openclaw.app.gateway.GatewayRegistryEntry
@@ -152,6 +156,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -165,7 +170,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -938,8 +943,11 @@ class NodeRuntime private constructor(
   private class GatewayConnectAttempt(
     val id: Long,
     val endpoint: GatewayEndpoint,
+    var userInitiated: Boolean = false,
+    var admissionCheckpoint: Long,
   ) {
     val operatorReady = MutableStateFlow<GatewaySession.RequestLease?>(null)
+    var pendingAuth: GatewayConnectAuth? = null
     var operation: GatewayConnectionOperation? = null
   }
 
@@ -953,7 +961,7 @@ class NodeRuntime private constructor(
   // Retain one pending request while reconciliation awaits cleanup; equal desired values can
   // still require new work after a synchronous retirement or lifecycle invalidation.
   // Initialize before NetworkMonitor can request work during construction.
-  private val backgroundGatewayReconciliations = Channel<Unit>(Channel.CONFLATED)
+  private val backgroundGatewayReconciliations = Channel<Long>(Channel.CONFLATED)
 
   private var gatewayDataGeneration = 0L
 
@@ -1107,6 +1115,7 @@ class NodeRuntime private constructor(
     val bootstrapToken: String?,
     val password: String?,
     val bootstrapHandoff: ai.openclaw.app.gateway.GatewayBootstrapHandoff? = null,
+    val bootstrapExpiresAtMs: Long? = null,
   )
 
   /**
@@ -1123,6 +1132,20 @@ class NodeRuntime private constructor(
   private val appContext = context.applicationContext
   private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
   private val tlsProbeRunner = GatewayTlsProbeRunner(scope, tlsFingerprintProbe)
+  private val gatewayIngress by lazy {
+    GatewayIngressController(
+      scope,
+      prefs.gatewayRegistry,
+      CloudflareAccessSessionStore.Persistence.securePrefs(prefs),
+      prefs::loadGatewayCustomHeaders,
+      ::retireGatewayIngress,
+    )
+  }
+
+  internal fun gatewayAccessAdmissionCheckpoint(): Long = gatewayIngress.admissionCheckpoint()
+
+  internal val gatewayAccessPresentation get() = gatewayIngress.presentation
+  private var ingressPreparation: Job? = null
   private val deviceAuthStore = DeviceAuthStore(prefs)
   val camera = CameraCaptureManager(appContext) { prefs.preferredCameraFacing.value }
   val location = LocationCaptureManager(appContext)
@@ -1173,6 +1196,7 @@ class NodeRuntime private constructor(
   private class GatewayConnectionContext(
     private val initialAuth: GatewayConnectAuth,
     val attempt: GatewayConnectAttempt?,
+    val ingressOrigin: CloudflareAccessOrigin?,
     // A started session owns retries and auth pauses before readiness is published.
     // Only bootstrap without operator auth may admit this role after the node connects.
     var operatorConnectAdmitted: Boolean = false,
@@ -1614,6 +1638,8 @@ class NodeRuntime private constructor(
 
   internal class GatewayConnectionOperation(
     private val isCurrent: () -> Boolean,
+    var userInitiated: Boolean = false,
+    val admissionCheckpoint: Long,
   ) : () -> Boolean {
     var deadline: Job? = null
     var handedOff = false
@@ -1712,6 +1738,7 @@ class NodeRuntime private constructor(
         handleGatewayEvent(event, payloadJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      ingressAuthorizationProvider = gatewayIngress::authorization,
     )
 
   private val sessionObserverVisibility =
@@ -1758,6 +1785,7 @@ class NodeRuntime private constructor(
   private data class SecondaryOperatorRuntime(
     val endpoint: GatewayEndpoint?,
     val session: GatewaySession,
+    val ingressOrigin: CloudflareAccessOrigin?,
   )
 
   private val secondaryOperatorSessions = ConcurrentHashMap<String, SecondaryOperatorRuntime>()
@@ -2054,6 +2082,7 @@ class NodeRuntime private constructor(
         prefs.saveGatewayTlsFingerprint(stableId, fingerprint)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
+      ingressAuthorizationProvider = gatewayIngress::authorization,
     )
 
   /**
@@ -2064,9 +2093,14 @@ class NodeRuntime private constructor(
 
   private fun retryGatewaySessionsAfterNetworkRestore() {
     launchGatewayLifecycle {
-      operatorSession.retryAfterNetworkRestore()
-      nodeSession.retryAfterNetworkRestore()
-      secondaryOperatorSessions.values.toList().forEach { it.session.retryAfterNetworkRestore() }
+      if (connectedEndpoint?.stableId?.let(gatewayIngress::blocksAutomaticReconnect) != true) {
+        operatorSession.retryAfterNetworkRestore()
+        nodeSession.retryAfterNetworkRestore()
+      }
+      secondaryOperatorSessions.values
+        .toList()
+        .filter { it.endpoint?.stableId?.let(gatewayIngress::blocksAutomaticReconnect) != true }
+        .forEach { it.session.retryAfterNetworkRestore() }
     }
   }
 
@@ -3295,17 +3329,16 @@ class NodeRuntime private constructor(
         }
       }
       scope.launch(Dispatchers.Default) {
-        combine(
-          prefs.gatewayRegistry.entries,
-          prefs.gatewayRegistry.connectedStableIds,
-          prefs.gatewayRegistry.activeStableId,
-          gateways,
-          backgroundGatewayReconciliations.consumeAsFlow().onStart { emit(Unit) },
-        ) { _, _, _, _, _ -> Unit }
-          .collect {
-            ensureActive()
-            reconcileBackgroundGatewayFleet()
-          }
+        merge(
+          prefs.gatewayRegistry.entries.map { gatewayIngress.admissionCheckpoint() },
+          prefs.gatewayRegistry.connectedStableIds.map { gatewayIngress.admissionCheckpoint() },
+          prefs.gatewayRegistry.activeStableId.map { gatewayIngress.admissionCheckpoint() },
+          gateways.map { gatewayIngress.admissionCheckpoint() },
+          backgroundGatewayReconciliations.consumeAsFlow(),
+        ).collect { admissionCheckpoint ->
+          ensureActive()
+          reconcileBackgroundGatewayFleet(admissionCheckpoint)
+        }
       }
     } else {
       applyScreenshotFixture()
@@ -3347,6 +3380,7 @@ class NodeRuntime private constructor(
 
   /** Updates foreground state and triggers reconnect/presence behavior on app visibility changes. */
   fun setForeground(value: Boolean) {
+    gatewayIngress.revalidate()
     val visibilityChanged =
       synchronized(gatewayLifecycleIntentLock) {
         (_isForeground.value != value).also {
@@ -3484,11 +3518,11 @@ class NodeRuntime private constructor(
       foreground = _isForeground.value && secondaryGatewayConnectionsEnabled,
     )
 
-  private fun requestBackgroundGatewayReconciliation() {
-    backgroundGatewayReconciliations.trySend(Unit)
+  private fun requestBackgroundGatewayReconciliation(admissionCheckpoint: Long = gatewayIngress.admissionCheckpoint()) {
+    backgroundGatewayReconciliations.trySend(admissionCheckpoint)
   }
 
-  private suspend fun reconcileBackgroundGatewayFleet() =
+  private suspend fun reconcileBackgroundGatewayFleet(admissionCheckpoint: Long) =
     gatewaySwitchMutex.withLock {
       // Wait for auth replacement before planning; a notification during reset must not be lost.
       // Secure-store reads stay outside the lifecycle monitor so Stop can retire this admission.
@@ -3527,11 +3561,23 @@ class NodeRuntime private constructor(
                 ),
             )
           val tls = connectionManager.resolveTlsParams(endpoint)
+          try {
+            gatewayIngress.prepare(endpoint, tls, userInitiated = false, admissionCheckpoint = admissionCheckpoint) {
+              intent() && stableId in currentBackgroundGatewayStableIds()
+            }
+          } catch (_: CancellationException) {
+            // A retired admission is local to this candidate; only real coroutine
+            // cancellation may terminate the long-lived fleet collector.
+            currentCoroutineContext().ensureActive()
+            continue
+          } catch (_: Exception) {
+            continue
+          }
           synchronized(gatewayLifecycleIntentLock) {
             val currentEntry =
               prefs.gatewayRegistry.entries.value
                 .firstOrNull { it.stableId == stableId }
-            if (!intent() || stableId !in currentBackgroundGatewayStableIds() || entry != currentEntry ||
+            if (!intent() || stableId !in currentBackgroundGatewayStableIds() || entry.copy(accessOrigin = currentEntry?.accessOrigin) != currentEntry ||
               (entry.kind == GatewayRegistryEntryKind.DISCOVERED && endpoint !in gateways.value)
             ) {
               return@synchronized
@@ -3550,8 +3596,9 @@ class NodeRuntime private constructor(
                 // Only the focused runtime owns node commands and UI state.
                 onEvent = { _, _ -> },
                 customHeadersProvider = prefs::loadGatewayCustomHeaders,
+                ingressAuthorizationProvider = gatewayIngress::authorization,
               )
-            secondaryOperatorSessions[stableId] = SecondaryOperatorRuntime(endpoint, session)
+            secondaryOperatorSessions[stableId] = SecondaryOperatorRuntime(endpoint, session, gatewayIngress.managedOrigin(endpoint))
             session.connect(endpoint, operatorAuth.token, operatorAuth.bootstrapToken, operatorAuth.password, options, tls)
           }
         }
@@ -3584,6 +3631,7 @@ class NodeRuntime private constructor(
     stableId: String,
     isCurrent: () -> Boolean = { true },
   ): GatewayTargetSelection {
+    val admissionCheckpoint = (isCurrent as? GatewayConnectionOperation)?.admissionCheckpoint ?: gatewayIngress.admissionCheckpoint()
     val intent =
       synchronized(gatewayLifecycleIntentLock) {
         if (!isCurrent()) return GatewayTargetSelection.Retired
@@ -3595,7 +3643,7 @@ class NodeRuntime private constructor(
         ) {
           return selectedGatewayTarget()
         }
-        beginGatewayReplacementOperation(isCurrent) ?: return GatewayTargetSelection.Retired
+        beginGatewayReplacementOperation(isCurrent, admissionCheckpoint) ?: return GatewayTargetSelection.Retired
       }
     try {
       return gatewaySwitchMutex.withLock {
@@ -3725,6 +3773,7 @@ class NodeRuntime private constructor(
   }
 
   private fun autoConnectIfNeeded() {
+    val admissionCheckpoint = gatewayIngress.admissionCheckpoint()
     if (preferredGatewayReconnectSuppressed) return
     if (didAutoConnect) return
     if (gatewayConnectionDisplay.value.isConnected) return
@@ -3740,13 +3789,15 @@ class NodeRuntime private constructor(
     val operation =
       synchronized(gatewayLifecycleIntentLock) {
         if (gatewayLifecycleIntentSeq.get() != 1L) return
-        createGatewayConnectionOperation(gatewayLifecycleIntent(1L))
+        createGatewayConnectionOperation(gatewayLifecycleIntent(1L), admissionCheckpoint = admissionCheckpoint)
       }
     launchConnect(endpoint, explicitAuth = null, intent = operation)
   }
 
   private fun reconnectPreferredGatewayOnForeground() =
     synchronized(gatewayLifecycleIntentLock) {
+      val preferredId = prefs.gatewayRegistry.activeStableId.value
+      if (preferredId != null && gatewayIngress.blocksAutomaticReconnect(preferredId)) return@synchronized
       if (preferredGatewayReconnectSuppressed || gatewayConnectionDisplay.value.isConnected || connectingEndpoint != null) return@synchronized
       if (connectedEndpoint != null) {
         val connection = activeGatewayConnection
@@ -3758,7 +3809,7 @@ class NodeRuntime private constructor(
           refreshGatewayConnection()
         }
       } else {
-        resolvePreferredGatewayEndpoint()?.let { connect(it) }
+        resolvePreferredGatewayEndpoint()?.let { connect(it, userInitiated = false) }
       }
     }
 
@@ -4685,6 +4736,13 @@ class NodeRuntime private constructor(
     }
 
   fun refreshGatewayConnection(isCurrent: () -> Boolean = { true }) {
+    val target = connectedEndpoint ?: resolvePreferredGatewayEndpoint()
+    if (target != null && gatewayIngress.presentation.value.attention
+        ?.stableId == target.stableId
+    ) {
+      retryGatewayAccess(isCurrent)
+      return
+    }
     val intent = beginGatewayReplacementOperation(isCurrent) ?: return
     intent.handedOff = true
     launchGatewayLifecycle(intent) {
@@ -4704,9 +4762,7 @@ class NodeRuntime private constructor(
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint)) {
-        beginConnectAttempt(endpoint)
-      }
+      beginConnect(endpoint, resolveGatewayConnectAuth(endpoint), intent)
     }
   }
 
@@ -4725,7 +4781,10 @@ class NodeRuntime private constructor(
     }
   }
 
-  internal fun beginGatewayConnectionOperation(isCurrent: () -> Boolean): GatewayConnectionOperation? =
+  internal fun beginGatewayConnectionOperation(
+    admissionCheckpoint: Long = gatewayIngress.admissionCheckpoint(),
+    isCurrent: () -> Boolean,
+  ): GatewayConnectionOperation? =
     synchronized(gatewayLifecycleIntentLock) {
       if (!isCurrent()) return@synchronized null
       // The ViewModel starts this owner before its config queue. Reuse its deadline;
@@ -4734,12 +4793,15 @@ class NodeRuntime private constructor(
         return@synchronized isCurrent.takeIf { gatewayConnectionOperation === it }
       }
       val previousFailure = gatewayConnectionDisplay.value.problem?.isNetworkFailure == true
-      createGatewayConnectionOperation(gatewayLifecycleIntent(advanceGatewayRequestIntent(), isCurrent), previousFailure)
+      createGatewayConnectionOperation(gatewayLifecycleIntent(advanceGatewayRequestIntent(), isCurrent), previousFailure, userInitiated = true, admissionCheckpoint = admissionCheckpoint)
     }
 
-  private fun beginGatewayReplacementOperation(isCurrent: () -> Boolean): GatewayConnectionOperation? =
+  private fun beginGatewayReplacementOperation(
+    isCurrent: () -> Boolean,
+    admissionCheckpoint: Long = (isCurrent as? GatewayConnectionOperation)?.admissionCheckpoint ?: gatewayIngress.admissionCheckpoint(),
+  ): GatewayConnectionOperation? =
     synchronized(gatewayLifecycleIntentLock) {
-      val operation = beginGatewayConnectionOperation(isCurrent) ?: return@synchronized null
+      val operation = beginGatewayConnectionOperation(admissionCheckpoint, isCurrent) ?: return@synchronized null
       // Endpoint validation (or an explicit connect/refresh) commits replacement intent before
       // queued cleanup. Generic UI operation birth and same/unavailable selections do not.
       clearAcceptedConnectAttempt()
@@ -4750,8 +4812,10 @@ class NodeRuntime private constructor(
   private fun createGatewayConnectionOperation(
     isCurrent: () -> Boolean,
     waitingForCleanup: Boolean = false,
+    userInitiated: Boolean = false,
+    admissionCheckpoint: Long = (isCurrent as? GatewayConnectionOperation)?.admissionCheckpoint ?: gatewayIngress.admissionCheckpoint(),
   ): GatewayConnectionOperation {
-    val operation = GatewayConnectionOperation(isCurrent)
+    val operation = GatewayConnectionOperation(isCurrent, userInitiated, admissionCheckpoint)
     gatewayConnectionOperation = operation
     publishGatewayAdmission(operation, waitingForCleanup)
     operation.deadline =
@@ -4866,7 +4930,7 @@ class NodeRuntime private constructor(
     runGatewayConnectOperation {
       beforeConnect()
       activeGatewayConnection?.bootstrapHandoff?.invalidate()
-      val connection = GatewayConnectionContext(auth, acceptedConnectAttempt.value)
+      val connection = GatewayConnectionContext(auth, acceptedConnectAttempt.value, gatewayIngress.managedOrigin(endpoint))
       activeGatewayConnection = connection
       connection.attempt?.operatorReady?.value = null
       val tls = connectionManager.resolveTlsParams(endpoint)
@@ -5054,14 +5118,14 @@ class NodeRuntime private constructor(
 
   private fun beginConnectAttempt(
     endpoint: GatewayEndpoint,
-    operation: GatewayConnectionOperation? = null,
+    operation: GatewayConnectionOperation,
   ): Long {
     clearAcceptedConnectAttempt()
     activeGatewayConnection?.bootstrapHandoff?.invalidate()
     preferredGatewayReconnectSuppressed = false
     secondaryGatewayConnectionsEnabled = true
     return connectAttemptSeq.incrementAndGet().also {
-      acceptedConnectAttempt.value = GatewayConnectAttempt(it, endpoint).apply { this.operation = operation }
+      acceptedConnectAttempt.value = GatewayConnectAttempt(it, endpoint, operation.userInitiated, operation.admissionCheckpoint).apply { this.operation = operation }
     }
   }
 
@@ -5073,6 +5137,9 @@ class NodeRuntime private constructor(
       if (attempt != null) synchronized(gatewayStatusLock) { gatewayStandaloneDisplay = null }
       tlsProbeJob?.cancel()
       tlsProbeJob = null
+      ingressPreparation?.cancel()
+      ingressPreparation = null
+      gatewayIngress.cancelPending()
       tlsProbeRunner.cancel()
       attempt?.operation?.let { finishGatewayConnectionOperation(it) }
       _pendingGatewayTrust.value = null
@@ -5116,6 +5183,10 @@ class NodeRuntime private constructor(
       _gatewayControlPage.value = null
       return
     }
+    if (gatewayIngress.needsEmbeddedBrowserSignIn(endpoint.stableId)) {
+      _gatewayControlPage.value = null
+      return
+    }
     val pageAuth = resolveGatewayControlPageAuth(auth ?: resolveGatewayConnectAuth(endpoint), storedOperatorToken)
     _gatewayControlPage.value =
       GatewayControlPage(
@@ -5131,25 +5202,64 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
     connectAttemptId: Long,
   ) {
-    // Trust approval continues the accepted attempt instead of retiring its waiting callers.
-    if (!isCurrentConnectAttempt(connectAttemptId)) return
-    connectWithAuth(endpoint = endpoint, auth = auth) {
-      connectedEndpoint = endpoint
-      connectingEndpoint = null
-      updateStatus {
-        operatorConnectionProblem = null
-        nodeConnectionProblem = null
-        operatorStatusText = "Connecting…"
-        nodeStatusText = "Connecting…"
+    // Browser polling runs outside the switch mutex and the ordinary 20-second admission budget.
+    val attempt = acceptedConnectAttempt.value?.takeIf { it.id == connectAttemptId } ?: return
+    attempt.pendingAuth = auth
+    ingressPreparation?.cancel()
+    ingressPreparation =
+      scope.launch {
+        try {
+          val tls = connectionManager.resolveTlsParams(endpoint)
+          synchronized(gatewayLifecycleIntentLock) {
+            if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
+            registerGateway(endpoint, setActive = false)
+          }
+          val ingress = gatewayIngress.prepare(endpoint, tls, attempt.userInitiated, attempt.admissionCheckpoint) { isCurrentConnectAttempt(connectAttemptId) }
+          if (ingress != null) _isForeground.first { it }
+          launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
+            if (auth.bootstrapToken != null && auth.bootstrapExpiresAtMs?.let { it <= System.currentTimeMillis() } == true) {
+              val message = "Setup code expired. Scan a new QR code to connect."
+              setStandaloneGatewayStatus(message, gatewayConnectionProblem(GatewaySession.ErrorShape("AUTH_BOOTSTRAP_TOKEN_INVALID", message), true, endpoint))
+              return@launchGatewayLifecycle
+            }
+            connectWithAuth(endpoint = endpoint, auth = auth) {
+              attempt.pendingAuth = null
+              connectedEndpoint = endpoint
+              connectingEndpoint = null
+              updateStatus {
+                operatorConnectionProblem = null
+                nodeConnectionProblem = null
+                operatorStatusText = "Connecting…"
+                nodeStatusText = "Connecting…"
+              }
+            }
+            requestBackgroundGatewayReconciliation()
+          }
+        } catch (error: CancellationException) {
+          throw error
+        } catch (error: Exception) {
+          synchronized(gatewayLifecycleIntentLock) {
+            if (!isCurrentConnectAttempt(connectAttemptId)) return@synchronized
+            val message = error.message ?: "Could not sign in. Try again."
+            val problem =
+              gatewayConnectionProblem(
+                GatewaySession.ErrorShape(if (error is GatewayExternalAuthorizationException) "EXTERNAL_AUTH_REQUIRED" else "ACCESS_SIGN_IN_FAILED", message),
+                true,
+                endpoint,
+              )
+            setStandaloneGatewayStatus(message, problem)
+          }
+        }
       }
-    }
   }
 
   fun connect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth? = null,
+    userInitiated: Boolean = true,
   ) {
-    val intent = beginGatewayReplacementOperation { true } ?: return
+    val intent = beginGatewayReplacementOperation(isCurrent = { true }) ?: return
+    intent.userInitiated = userInitiated
     launchConnect(endpoint, explicitAuth = auth, intent = intent)
   }
 
@@ -5172,6 +5282,7 @@ class NodeRuntime private constructor(
             token = credentials.token,
             bootstrapToken = credentials.bootstrapToken,
             password = credentials.password,
+            bootstrapExpiresAtMs = credentials.bootstrapExpiresAtMs,
           )
         }
     val bootstrap = auth.bootstrapToken?.trim()?.takeIf { it.isNotEmpty() } ?: return auth
@@ -5209,7 +5320,7 @@ class NodeRuntime private constructor(
       val attempt = acceptedConnectAttempt.value ?: return
       // Repeated taps cannot replace an already queued continuation or abandon its deadline.
       if (attempt.operation != null) return
-      val intent = beginGatewayConnectionOperation { true } ?: return
+      val intent = beginGatewayConnectionOperation(attempt.admissionCheckpoint) { true } ?: return
       attempt.operation = intent
       intent.handedOff = true
       launchGatewayLifecycle({ isCurrentConnectAttempt(connectAttemptId) }) {
@@ -5378,6 +5489,8 @@ class NodeRuntime private constructor(
       disconnectSecondaryGatewayConnection(normalized)?.disconnectAndJoin()
       if (connectedEndpoint?.stableId == normalized) {
         disconnectAndJoin()
+        ai.openclaw.app.ui.chat
+          .retireGatewayMediaPlayback()
       } else if (wasActive) {
         prepareDisconnect(retireRunState = true)
       }
@@ -5391,6 +5504,7 @@ class NodeRuntime private constructor(
       if (!removalStaged) return false
       val authRetired =
         runCatching {
+          gatewayIngress.forget(normalized)
           val deviceId = identityStore.loadOrCreate().deviceId
           deviceAuthStore.clearToken(normalized, deviceId, "node")
           deviceAuthStore.clearToken(normalized, deviceId, "operator")
@@ -5488,6 +5602,130 @@ class NodeRuntime private constructor(
     drainPrimaryGatewaySessions()
   }
 
+  private fun endpointHasAccessOrigin(
+    endpoint: GatewayEndpoint?,
+    origin: CloudflareAccessOrigin,
+  ): Boolean =
+    endpoint != null &&
+      runCatching {
+        CloudflareAccessOrigin.from(
+          ai.openclaw.app.gateway
+            .buildGatewayWebSocketUrl(endpoint.host, endpoint.port, true, endpoint.contextPath),
+        ) == origin
+      }.getOrDefault(false)
+
+  private suspend fun retireGatewayIngress(origin: CloudflareAccessOrigin) {
+    val primary: Boolean
+    val secondary: List<GatewaySession>
+    synchronized(gatewayLifecycleIntentLock) {
+      // A shared hostname does not imply grant ownership: service-header and WARP
+      // connections never consumed this browser session and must keep running.
+      primary = activeGatewayConnection?.ingressOrigin == origin
+      secondary =
+        secondaryOperatorSessions.values
+          .toList()
+          .filter { it.ingressOrigin == origin }
+          .mapNotNull { it.endpoint?.stableId?.let(::disconnectSecondaryGatewayConnection) }
+      if (primary) {
+        activeGatewayConnection?.bootstrapHandoff?.invalidate()
+        activeGatewayConnection = null
+        acceptedConnectAttempt.value?.operatorReady?.value = null
+        _gatewayControlPage.value = null
+        synchronized(gatewayDataScopeLock) {
+          gatewayDataGeneration += 1
+          clearOperatorGatewayState(retirePendingCronRuns = true)
+        }
+        chat.onGatewayScopeChanging(retireRunState = false)
+        stopMessageSpeech()
+        stopActiveVoiceSession()
+        operatorSession.disconnect()
+        nodeSession.disconnect()
+        updateStatus {
+          operatorConnected = false
+          _nodeConnected.value = false
+          operatorStatusText = "Sign in to Cloudflare Access to reconnect."
+          nodeStatusText = operatorStatusText
+        }
+      }
+    }
+    // Keep the pending user admission and Gateway identities. Only old ingress consumers drain.
+    coroutineScope {
+      if (primary) {
+        launch { drainPrimaryGatewaySessions() }
+        launch {
+          ai.openclaw.app.ui.chat
+            .retireGatewayMediaPlayback()
+        }
+      }
+      secondary.forEach { session -> launch { session.disconnectAndJoin() } }
+    }
+  }
+
+  internal fun consumeGatewayAccessBrowserLaunch(id: UUID): String? = gatewayIngress.consumeBrowserLaunch(id)
+
+  internal fun cancelGatewayAccess(
+    id: UUID,
+    launchFailed: Boolean = false,
+  ) {
+    gatewayIngress.cancel(id, if (launchFailed) "Could not open the sign-in browser. Try again." else "Sign-in canceled. Sign in again to reconnect.")
+  }
+
+  internal fun signOutGatewayAccess(stableId: String) {
+    gatewayIngress.signOut(stableId)
+  }
+
+  internal fun retryGatewayAccess(isCurrent: () -> Boolean = { true }) {
+    val admissionCheckpoint = (isCurrent as? GatewayConnectionOperation)?.admissionCheckpoint ?: gatewayIngress.admissionCheckpoint()
+    val intent = gatewayLifecycleIntent(callerIsCurrent = isCurrent)
+    val retry = gatewayIngress.retry(admissionCheckpoint, intent) ?: return
+    val accepted = acceptedConnectAttempt.value
+    if (accepted?.endpoint?.stableId == retry.stableId && accepted.pendingAuth != null && isCurrentConnectAttempt(accepted.id)) {
+      accepted.userInitiated = true
+      accepted.admissionCheckpoint = admissionCheckpoint
+      connectAfterTlsCheckLocked(accepted.endpoint, accepted.pendingAuth!!, accepted.id)
+      return
+    }
+    val endpoint =
+      resolveGatewaySwitchEndpoint(retry.stableId) ?: run {
+        retry.reportFailure("This saved gateway is unavailable. Check its address or discovery, then try again.")
+        return
+      }
+    val activeId = prefs.gatewayRegistry.activeStableId.value
+    scope.launch {
+      try {
+        retry.prepare(endpoint, connectionManager.resolveTlsParams(endpoint))
+        _isForeground.first { it }
+        if (!intent() || activeId != prefs.gatewayRegistry.activeStableId.value || preferredGatewayReconnectSuppressed) return@launch
+        requestBackgroundGatewayReconciliation(admissionCheckpoint)
+        val active = resolvePreferredGatewayEndpoint()
+        val origin =
+          CloudflareAccessOrigin.from(
+            ai.openclaw.app.gateway
+              .buildGatewayWebSocketUrl(endpoint.host, endpoint.port, true, endpoint.contextPath),
+          )
+        if (endpointHasAccessOrigin(active, origin)) {
+          val operation =
+            synchronized(gatewayLifecycleIntentLock) {
+              if (!intent() || activeId != prefs.gatewayRegistry.activeStableId.value ||
+                preferredGatewayReconnectSuppressed || activeGatewayConnection != null
+              ) {
+                null
+              } else {
+                // Resume the already fenced intent. Advancing its sequence here would
+                // invalidate the very caller that authorizes this renewed admission.
+                createGatewayConnectionOperation(intent, userInitiated = true, admissionCheckpoint = admissionCheckpoint)
+              }
+            }
+          if (operation != null) refreshGatewayConnection(operation)
+        }
+      } catch (error: CancellationException) {
+        throw error
+      } catch (error: Exception) {
+        retry.reportFailure(error.message ?: "Could not sign in. Try again.")
+      }
+    }
+  }
+
   private suspend fun drainPrimaryGatewaySessions() {
     // Close both sockets before joining either role's accepted token writes.
     coroutineScope {
@@ -5537,6 +5775,8 @@ class NodeRuntime private constructor(
     path: String,
     failedResource: ChatWidgetResource?,
   ): ChatWidgetResource? {
+    if (connectedEndpoint?.stableId?.let(gatewayIngress::needsEmbeddedBrowserSignIn) == true) return null
+
     fun GatewaySession.currentWidgetSurface(): ChatWidgetSurface? =
       currentCanvasHostRoute()?.let { route ->
         ChatWidgetSurface(
