@@ -4611,6 +4611,8 @@ export const en: TranslationMap & {
       showMore: "Show {count} more",
       rateLimited:
         "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
+      unavailable:
+        "GitHub status could not be refreshed. Showing the last known state; check GitHub for the latest.",
     },
     usageRemaining: "Usage Remaining",
     view: {

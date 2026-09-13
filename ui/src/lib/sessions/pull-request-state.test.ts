@@ -189,7 +189,7 @@ function publicationHarness() {
   return { ...harness, request, sessions, row, attach };
 }
 async function publicationSettled(binding: GitHubPublicationBinding) {
-  await vi.waitFor(() => expect(binding.view()?.busy).toBe(false));
+  await vi.waitFor(() => expect(binding.view()?.activity).toBeNull());
   return binding.view()!;
 }
 const publishedResult = {

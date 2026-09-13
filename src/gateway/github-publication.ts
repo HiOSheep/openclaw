@@ -439,8 +439,22 @@ export function createGitHubPublicationCoordinator(params: {
       return [...(await methods.processClaim(claim)), ...(await repository.processClaim(claim))];
     },
     async resumeSessionRequests() {
-      await methods.resumeSessionRequests();
-      await repository.resumeSessionRequests();
+      const failures: unknown[] = [];
+      for (const coordinator of [methods, repository]) {
+        try {
+          await coordinator.resumeSessionRequests();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          failures
+            .map((error) => (error instanceof Error ? error.message : String(error)))
+            .join("; "),
+        );
+      }
     },
     deferOrphanedRequests() {
       methods.deferOrphanedRequests();

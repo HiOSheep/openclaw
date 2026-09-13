@@ -4,6 +4,7 @@ import type {
   SessionGitHubPublicationResult,
   SessionGitHubPublishParams,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   openOpenClawStateDatabase,
@@ -308,14 +309,35 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       const pending = new Set(
         params.placements.listPendingWorkspaceResults().map((result) => result.sessionId),
       );
+      const failures: Error[] = [];
+      const blockedWorktrees = new Set<string>();
       for (const row of rows) {
-        if (pending.has(row.session_id) || params.placements.get(row.session_id)?.turnClaim) {
+        if (
+          blockedWorktrees.has(row.worktree_id) ||
+          pending.has(row.session_id) ||
+          params.placements.get(row.session_id)?.turnClaim
+        ) {
           continue;
         }
-        await processRow(row, () => {
-          const placement = params.placements.get(row.session_id);
-          return !placement?.turnClaim && !pending.has(row.session_id);
-        });
+        try {
+          await processRow(row, () => {
+            const placement = params.placements.get(row.session_id);
+            return !placement?.turnClaim && !pending.has(row.session_id);
+          });
+        } catch (error) {
+          // Later requests for this checkout must not overtake its unfinished Git transaction.
+          blockedWorktrees.add(row.worktree_id);
+          failures.push(
+            new Error(`Publication ${row.request_id}: ${formatErrorMessage(error)}`, {
+              cause: error,
+            }),
+          );
+        }
+      }
+      // A recoverable index transaction retains its receipt, not the entire queue.
+      // Report failures after every independent request has had its turn.
+      if (failures.length > 0) {
+        throw new AggregateError(failures, failures.map((error) => error.message).join("; "));
       }
     },
 

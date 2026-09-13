@@ -39,7 +39,7 @@ export async function showPublicationBranch(
         pullRequests: [],
         branch: { owner: "openclaw", repo: "openclaw", branch, additions: 7, deletions: 2 },
         rateLimited: false,
-        status: "ok",
+        status: "ready",
       },
     },
   });
