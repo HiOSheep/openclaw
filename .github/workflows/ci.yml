@@ -5876,7 +5876,7 @@ jobs:
           shutil.copy2(metadata, evidence / 'androidTest' / metadata.name)
           TEST_APK_EVIDENCE
             /usr/bin/timeout --signal=TERM --kill-after=2s 30s adb -s emulator-5554 logcat -d -v brief -t 500 \
-              AndroidJUnitRunner:V TestRunner:V DirectTestLoader:E TestRequestBuilder:V AndroidJUnit4Builder:W AndroidRuntime:E '*:S' > "$RUNNER_TEMP/access-release-test-evidence/runner.log"
+              AndroidJUnitRunner:V TestRunner:V DirectTestLoader:E TestRequestBuilder:V AndroidJUnit4Builder:W AndroidRuntime:E ActivityManager:W '*:S' > "$RUNNER_TEMP/access-release-test-evidence/runner.log"
           fi
           apk="$(python3 - <<'PY'
           from pathlib import Path
