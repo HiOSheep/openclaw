@@ -3761,7 +3761,7 @@ class NodeRuntime private constructor(
         ) {
           prefs.gatewayRegistry.setActive(endpoint.stableId)
         }
-        beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent)
+        beginConnect(endpoint, resolveGatewayConnectAuth(endpoint, explicitAuth), intent, GatewayConnectPurpose.SelectTarget)
       }
       chat.restoreSelectedGatewayOfflineState()
       return intent()
@@ -4762,7 +4762,7 @@ class NodeRuntime private constructor(
         operatorStatusText = "Connecting…"
         operatorConnectionProblem = null
       }
-      beginConnect(endpoint, resolveGatewayConnectAuth(endpoint), intent)
+      beginConnect(endpoint, resolveGatewayConnectAuth(endpoint), intent, GatewayConnectPurpose.RefreshCurrent)
     }
   }
 
@@ -5010,23 +5010,28 @@ class NodeRuntime private constructor(
     }
   }
 
+  private enum class GatewayConnectPurpose { SelectTarget, RefreshCurrent }
+
   private fun beginConnect(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
     intent: GatewayConnectionOperation,
+    purpose: GatewayConnectPurpose,
   ) {
     synchronized(gatewayAuthLifecycleLock) {
       if (gatewayAuthResetInProgress) return
     }
-    // A user-selected connect target must never inherit notification content from another gateway.
-    if (gatewayDefaultAgentStableId?.let { it != endpoint.stableId } == true) {
-      updateGatewayDefaultAgentId(null)
+    // Refresh renews admission without replacing the selected conversation or notification scope.
+    if (purpose == GatewayConnectPurpose.SelectTarget) {
+      if (gatewayDefaultAgentStableId?.let { it != endpoint.stableId } == true) {
+        updateGatewayDefaultAgentId(null)
+      }
+      notificationOutbox.clear()
+      invalidateNodeCapabilityApprovalState()
     }
-    notificationOutbox.clear()
-    invalidateNodeCapabilityApprovalState()
     val connectAttemptId = beginConnectAttempt(endpoint, intent)
     connectingEndpoint = endpoint
-    chat.onGatewayScopeChanging()
+    if (purpose == GatewayConnectPurpose.SelectTarget) chat.onGatewayScopeChanging()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {

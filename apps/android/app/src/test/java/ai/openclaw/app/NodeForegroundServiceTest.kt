@@ -2752,39 +2752,43 @@ class NodeForegroundServiceTest {
       dispatcher =
         object : Dispatcher() {
           override fun dispatch(request: RecordedRequest): MockResponse =
-            MockResponse().withWebSocketUpgrade(
-              object : WebSocketListener() {
-                override fun onOpen(
-                  webSocket: WebSocket,
-                  response: Response,
-                ) {
-                  webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"lifetime-proof","ts":${System.currentTimeMillis()}}}""")
-                }
+            if (!request.getHeader("Upgrade").equals("websocket", ignoreCase = true)) {
+              MockResponse().setResponseCode(404)
+            } else {
+              MockResponse().withWebSocketUpgrade(
+                object : WebSocketListener() {
+                  override fun onOpen(
+                    webSocket: WebSocket,
+                    response: Response,
+                  ) {
+                    webSocket.send("""{"type":"event","event":"connect.challenge","payload":{"nonce":"lifetime-proof","ts":${System.currentTimeMillis()}}}""")
+                  }
 
-                override fun onMessage(
-                  webSocket: WebSocket,
-                  text: String,
-                ) {
-                  val frame = Json.parseToJsonElement(text).jsonObject
-                  val id = frame["id"] ?: return
-                  val payload =
-                    if (frame["method"]?.jsonPrimitive?.content == "connect") {
-                      onConnect?.invoke(frame)
-                      hello(
-                        frame["params"]
-                          ?.jsonObject
-                          ?.get("role")
-                          ?.jsonPrimitive
-                          ?.content
-                          .orEmpty(),
-                      )
-                    } else {
-                      onRequest(frame)
-                    }
-                  webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
-                }
-              },
-            )
+                  override fun onMessage(
+                    webSocket: WebSocket,
+                    text: String,
+                  ) {
+                    val frame = Json.parseToJsonElement(text).jsonObject
+                    val id = frame["id"] ?: return
+                    val payload =
+                      if (frame["method"]?.jsonPrimitive?.content == "connect") {
+                        onConnect?.invoke(frame)
+                        hello(
+                          frame["params"]
+                            ?.jsonObject
+                            ?.get("role")
+                            ?.jsonPrimitive
+                            ?.content
+                            .orEmpty(),
+                        )
+                      } else {
+                        onRequest(frame)
+                      }
+                    webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
+                  }
+                },
+              )
+            }
         }
       start(InetAddress.getByName("127.0.0.1"), 0)
     }
