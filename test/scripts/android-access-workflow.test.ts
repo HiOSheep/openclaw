@@ -117,7 +117,7 @@ describe("Android Access native workflow", () => {
     expect(step.run).toContain("androidComponents').finalizeDsl");
     expect(step.run).toContain("dsl.testBuildType = 'release'");
     expect(step.run).toContain(
-      '--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache',
+      '--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache --info',
     );
     expect(step.run).toContain("^> Task :app:minifyPlayReleaseWithR8$");
     expect(step.run).toContain("outputs/mapping/playRelease/configuration.txt");

@@ -5835,7 +5835,7 @@ jobs:
             }
           }
           GRADLE
-            gradle_args+=(--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache)
+            gradle_args+=(--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache --info)
           fi
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             ":app:connectedPlay${BUILD_TYPE}AndroidTest" "${gradle_args[@]}" \
