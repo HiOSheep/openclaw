@@ -46,7 +46,7 @@ export function projectSessionCatalogSourceParticipant(
     }
   }
   const profileId = profile?.id ?? identity.id;
-  const github = verifiedGitHubIdentities([profileId])?.get(profileId);
+  const github = verifiedGitHubIdentities([profileId])?.get(profileId)?.primary;
   const label = sourceLabel(profile?.displayName ?? github?.login ?? params.label);
   return {
     identity: {
@@ -90,14 +90,16 @@ export function createSessionCatalogGitHubLinker() {
   const profilesByAccountId = new Map<string, string>();
   const profilesByLogin = new Map<string, string>();
   const profiles: Parameters<typeof projectSessionParticipant>[1] = new Map();
-  for (const [profileId, github] of verifiedGitHubIdentities() ?? []) {
-    const accountId = String(github.accountId);
-    const login = github.login.toLowerCase();
-    if (!profilesByAccountId.has(accountId)) {
-      profilesByAccountId.set(accountId, profileId);
-    }
-    if (!profilesByLogin.has(login)) {
-      profilesByLogin.set(login, profileId);
+  for (const [profileId, { accounts }] of verifiedGitHubIdentities() ?? []) {
+    for (const github of accounts) {
+      const accountId = String(github.accountId);
+      const login = github.login.toLowerCase();
+      if (!profilesByAccountId.has(accountId)) {
+        profilesByAccountId.set(accountId, profileId);
+      }
+      if (!profilesByLogin.has(login)) {
+        profilesByLogin.set(login, profileId);
+      }
     }
   }
   return {
