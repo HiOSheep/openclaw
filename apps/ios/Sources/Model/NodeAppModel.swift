@@ -287,6 +287,7 @@ final class NodeAppModel {
         let fallbackPassword: String?
         let initialOptions: GatewayConnectOptions
         let sessionBox: WebSocketSessionBox?
+        let ingressAuthorization: GatewayIngressAuthorization?
     }
 
     private struct NodeGatewayLoopState: Sendable {
@@ -685,6 +686,7 @@ final class NodeAppModel {
     private var quarantinedChatOfflineGatewayIDs: Set<GatewayStableIdentifier.Key> = []
     #if DEBUG
     @ObservationIgnored var testRemoveAllChatDatabaseFilesHandler: (() throws -> Void)?
+    @ObservationIgnored var testStageChatOfflineDataRemovalHandler: ((String) async -> Bool)?
     #endif
 
     /// Gateway-scoped facade over the installation-wide cache and client-state
@@ -778,6 +780,11 @@ final class NodeAppModel {
     /// Delete one forgotten gateway's cache and durable state, or both
     /// installation-wide databases during a full onboarding reset.
     func stageChatOfflineDataRemoval(gatewayID: String) async -> Bool {
+        #if DEBUG
+        if let testStageChatOfflineDataRemovalHandler {
+            return await testStageChatOfflineDataRemovalHandler(gatewayID)
+        }
+        #endif
         guard let gatewayKey = GatewayStableIdentifier.key(gatewayID) else { return false }
         if self.clientDatabases == nil {
             self.clientDatabases = Self.makeClientDatabases()
@@ -1162,7 +1169,7 @@ final class NodeAppModel {
             let registeredGatewayIDs = GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)
             self.clientDatabases?.resolvePendingGatewayRemovals(
                 registeredGatewayIDs: registeredGatewayIDs)
-            if let clientDatabases = self.clientDatabases {
+            if let clientDatabases {
                 let recoveredGatewayIDs = self.quarantinedChatOfflineGatewayIDs.filter {
                     !clientDatabases.hasPendingGatewayRemoval(gatewayID: $0.rawValue)
                 }
@@ -1421,7 +1428,7 @@ final class NodeAppModel {
     private func restartOperatorGatewayForTalkPermissionUpgrade(_ config: GatewayConnectConfig) {
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
-        let sessionBox = config.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let sessionBox = config.webSocketSessionBox()
         let routeGeneration = self.gatewayRouteGeneration
         self.talkPermissionUpgradeReconnectGeneration &+= 1
         let reconnectGeneration = self.talkPermissionUpgradeReconnectGeneration
@@ -1499,7 +1506,7 @@ final class NodeAppModel {
         self.clearOperatorGatewayConnectionProblemIfCurrent()
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
-        let sessionBox = config.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let sessionBox = config.webSocketSessionBox()
         let routeGeneration = self.gatewayRouteGeneration
         self.talkPermissionUpgradeReconnectGeneration &+= 1
         let reconnectGeneration = self.talkPermissionUpgradeReconnectGeneration
@@ -1755,7 +1762,8 @@ final class NodeAppModel {
                     password: relay.password,
                     sessionKey: mainSessionKey,
                     deliveryChannel: self.shareDeliveryChannel,
-                    deliveryTo: self.shareDeliveryTo))
+                    deliveryTo: self.shareDeliveryTo,
+                    requiresForegroundSignIn: relay.requiresForegroundSignIn))
         }
         if selectedAgentChanged {
             // Delivery metadata belongs to the selected agent. Rehydrate it
@@ -3604,11 +3612,11 @@ extension NodeAppModel {
         bootstrapToken: String?,
         password: String?,
         connectOptions: GatewayConnectOptions,
-        forceReconnect: Bool = false)
+        forceReconnect: Bool = false,
+        ingressAuthorization: GatewayIngressAuthorization? = nil)
     {
         let stableID = GatewayStableIdentifier.exact(gatewayStableID) ?? ""
         let effectiveStableID = stableID.isEmpty ? url.absoluteString : stableID
-        let sessionBox = tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
         let nextConfig = GatewayConnectConfig(
             url: url,
             stableID: stableID,
@@ -3616,7 +3624,9 @@ extension NodeAppModel {
             token: token,
             bootstrapToken: bootstrapToken,
             password: password,
-            nodeOptions: connectOptions)
+            nodeOptions: connectOptions,
+            ingressAuthorization: ingressAuthorization)
+        let sessionBox = nextConfig.webSocketSessionBox()
         let previousGatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
         let isSameGatewayTarget = previousGatewayStableID.map {
@@ -3726,7 +3736,8 @@ extension NodeAppModel {
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
             connectOptions: cfg.nodeOptions,
-            forceReconnect: forceReconnect)
+            forceReconnect: forceReconnect,
+            ingressAuthorization: cfg.ingressAuthorization)
     }
 
     func beginGatewayConnectAttempt() -> UInt64 {
@@ -3787,6 +3798,14 @@ extension NodeAppModel {
 
     func resetGatewaySessionsForForcedReconnect() async {
         await self.beginGatewaySessionReset().value
+    }
+
+    func retireGatewayIngress(for origin: CloudflareAccessOrigin) async {
+        guard self.activeGatewayConnectConfig?.ingressAuthorization?.origin == origin else { return }
+        // Keep Gateway keys and the pending connection generation. Renewal is an
+        // ingress boundary, not a user disconnect, forget, or pairing reset.
+        self.disconnectGateway(disablePersistedAutoConnect: false, invalidateConnectAttempts: false)
+        await self.waitForGatewaySessionResetIfNeeded()
     }
 
     func resetGatewaySessionsForTargetSwitch() async {
@@ -4262,7 +4281,8 @@ extension NodeAppModel {
                 token: config.token,
                 bootstrapToken: nil,
                 password: config.password,
-                nodeOptions: reconnectOptions)
+                nodeOptions: reconnectOptions,
+                ingressAuthorization: config.ingressAuthorization)
 
             if self.operatorGatewayTask == nil,
                self.shouldStartOperatorGatewayLoop(
@@ -4272,9 +4292,7 @@ extension NodeAppModel {
                    deviceAuthGatewayID: deviceAuthGatewayID,
                    allowStoredDeviceAuth: true)
             {
-                let sessionBox = config.tls.map {
-                    WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0))
-                }
+                let sessionBox = config.webSocketSessionBox()
                 self.startOperatorGatewayLoop(
                     url: config.url,
                     stableID: stableID,
@@ -4527,14 +4545,16 @@ extension NodeAppModel {
         UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
         LiveActivityManager.shared.handleReconnect()
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        let requiresForegroundSignIn = self.activeGatewayConnectConfig?.ingressAuthorization != nil
         ShareGatewayRelaySettings.saveConfig(ShareGatewayRelayConfig(
             gatewayURLString: url.absoluteString,
             gatewayStableID: nodeOptions.deviceAuthGatewayID,
-            token: auth.token,
-            password: auth.password,
+            token: requiresForegroundSignIn ? nil : auth.token,
+            password: requiresForegroundSignIn ? nil : auth.password,
             sessionKey: self.mainSessionKey,
             deliveryChannel: self.shareDeliveryChannel,
-            deliveryTo: self.shareDeliveryTo))
+            deliveryTo: self.shareDeliveryTo,
+            requiresForegroundSignIn: requiresForegroundSignIn))
         GatewayDiagnostics.log(
             "gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
 
@@ -4572,6 +4592,7 @@ extension NodeAppModel {
         // Async reconnect helpers can resume after Disconnect or a target switch. Only the
         // current route may install a new loop after those suspension points.
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        let ingressAuthorization = self.activeGatewayConnectConfig?.ingressAuthorization
         // Operator session reconnects independently (chat/talk/config/voicewake), but we tie its
         // lifecycle to the current gateway config so it doesn't keep running across Disconnect.
         self.operatorGatewayTask = Task { [weak self] in
@@ -4629,7 +4650,10 @@ extension NodeAppModel {
                         connectOptions: operatorOptions,
                         sessionBox: sessionBox,
                         extraHeadersProvider: {
-                            GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
+                            if let ingressAuthorization {
+                                return try await ingressAuthorization.headers(url)
+                            }
+                            return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: stableID)
                         },
                         onConnected: { [weak self] in
                             await self?.handleOperatorGatewayConnected(
@@ -4807,7 +4831,8 @@ extension NodeAppModel {
             fallbackBootstrapToken: bootstrapToken,
             fallbackPassword: password,
             initialOptions: nodeOptions,
-            sessionBox: sessionBox)
+            sessionBox: sessionBox,
+            ingressAuthorization: activeGatewayConnectConfig?.ingressAuthorization)
         self.nodeGatewayTask = Task { [weak self] in
             await self?.runNodeGatewayLoop(context)
         }
@@ -4896,7 +4921,10 @@ extension NodeAppModel {
                 connectOptions: connectedOptions,
                 sessionBox: context.sessionBox,
                 extraHeadersProvider: {
-                    GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: context.stableID)
+                    if let ingress = context.ingressAuthorization {
+                        return try await ingress.headers(context.url)
+                    }
+                    return GatewaySettingsStore.loadGatewayCustomHeaders(gatewayStableID: context.stableID)
                 },
                 onConnected: { [weak self] in
                     await self?.handleNodeGatewayConnected(
@@ -5438,7 +5466,8 @@ extension NodeAppModel {
                             password: relay.password,
                             sessionKey: self.mainSessionKey,
                             deliveryChannel: channel,
-                            deliveryTo: to))
+                            deliveryTo: to,
+                            requiresForegroundSignIn: relay.requiresForegroundSignIn))
                 }
             }
         } catch {
@@ -9584,7 +9613,7 @@ extension NodeAppModel {
         guard self.operatorGatewayTask == nil else {
             return
         }
-        let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let sessionBox = cfg.webSocketSessionBox()
         self.startOperatorGatewayLoop(
             url: cfg.url,
             stableID: cfg.effectiveStableID,
@@ -9710,7 +9739,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.stopGatewayHealthMonitor()
 
-        let sessionBox = cfg.tls.map { WebSocketSessionBox(session: GatewayTLSPinningSession(params: $0)) }
+        let sessionBox = cfg.webSocketSessionBox()
         self.startOperatorGatewayLoop(
             url: cfg.url,
             stableID: cfg.effectiveStableID,

@@ -179,6 +179,10 @@ describe.skipIf(process.platform === "win32")("iOS Access simulator workflow", (
     expect(tests[0]?.args.filter((arg) => arg.startsWith("-only-testing:"))).toEqual([
       ...authClasses.map((name) => `-only-testing:OpenClawLogicTests/${name}`),
       "-only-testing:OpenClawTests/GatewayIngressControllerTests",
+      "-only-testing:OpenClawTests/GatewayConnectionControllerTests",
+      "-only-testing:OpenClawTests/GatewayOperatorFleetTests",
+      "-only-testing:OpenClawTests/IOSMediaArtifactLoaderTests",
+      "-only-testing:OpenClawTests/OpenClawTypographyTests",
     ]);
     for (const name of authClasses) {
       expect(readFileSync(`apps/ios/Tests/Logic/${name}.swift`, "utf8")).toContain(

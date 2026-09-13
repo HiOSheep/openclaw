@@ -7,6 +7,23 @@ import UIKit
 @testable import OpenClaw
 @testable import OpenClawKit
 
+@MainActor
+private func makeOrdinaryIngress() -> GatewayIngressController {
+    // These controller tests isolate Gateway routing and TLS decisions. Access
+    // admission and real HTTP behavior have their own focused suites.
+    GatewayIngressController(
+        persistence: .init(load: { _ in nil }, save: { _, _ in true }, delete: { _ in true }),
+        requestFactory: { _ in
+            { request, _ in
+                guard let url = request.url,
+                      let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+                else { throw URLError(.badURL) }
+                return (Data(), response)
+            }
+        },
+        retireTransports: { _ in })
+}
+
 private func percentEncodedPath(of url: URL?) -> String? {
     url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.percentEncodedPath }
 }
@@ -154,7 +171,7 @@ private struct ControllableTLSProbe {
                     return result
                 }
                 return .failure(.certificateUnavailable)
-            })
+            }, ingress: makeOrdinaryIngress())
     }
 }
 
@@ -167,7 +184,7 @@ private func makeTLSProbeController(
         appModel: appModel,
         startDiscovery: false,
         tcpReachabilityProbe: { _, _, _, _ in true },
-        tlsFingerprintProbe: { _ in .fingerprint(fingerprint) })
+        tlsFingerprintProbe: { _ in .fingerprint(fingerprint) }, ingress: makeOrdinaryIngress())
 }
 
 @MainActor
@@ -235,7 +252,10 @@ private func waitUntil(
     @Test @MainActor func `background cancels operator fleet reconciliation`() {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         controller.setScenePhase(.active)
         #expect(controller._test_hasOperatorFleetReconcileTask())
@@ -291,7 +311,10 @@ private func waitUntil(
 
         withUserDefaults([displayKey: nil, "node.instanceId": "ios-test"]) {
             let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             let resolved = controller._test_resolvedDisplayName(defaults: defaults)
             #expect(!resolved.isEmpty)
@@ -308,7 +331,10 @@ private func waitUntil(
             VoiceWakePreferences.enabledKey: true,
         ]) {
             let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             let caps = Set(controller._test_currentCaps())
 
             #expect(!caps.contains(OpenClawCapability.canvas.rawValue))
@@ -330,7 +356,10 @@ private func waitUntil(
             "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
         ]) {
             let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             let commands = Set(controller._test_currentCommands())
 
             #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
@@ -354,7 +383,10 @@ private func waitUntil(
 
     @Test @MainActor func `registration permissions exclude watch availability`() async {
         let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
         let permissions = await controller._test_currentPermissions()
 
         #expect(!permissions.keys.contains(where: { $0.hasPrefix("watch") }))
@@ -373,7 +405,10 @@ private func waitUntil(
             "location.enabledMode": OpenClawLocationMode.whileUsing.rawValue,
         ]) {
             let appModel = NodeAppModel()
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             let commands = Set(controller._test_currentCommands())
 
             // iOS should expose notify, but not host shell/exec-approval commands.
@@ -738,7 +773,10 @@ private func waitUntil(
             host: nil,
             expectedGeneration: generation)
         if cancel {
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             controller.cancelPendingConnectionAttempts()
         } else {
             appModel.beginGatewayPreconnectVerification(
@@ -1021,7 +1059,10 @@ private func waitUntil(
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         await controller.connectManual(
             host: link.host,
@@ -1055,7 +1096,10 @@ private func waitUntil(
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         await controller.connectManual(
             host: link.host,
@@ -1128,7 +1172,7 @@ private func waitUntil(
             role: "node",
             token: "ambiguous-share-token",
             profile: .shareExtension)
-        _ = GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
+        _ = GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false, ingress: makeOrdinaryIngress())
 
         #expect(DeviceAuthStore.loadToken(
             deviceId: primaryIdentity.deviceId,
@@ -1183,7 +1227,7 @@ private func waitUntil(
             password: nil,
             sessionKey: "main"))
 
-        _ = GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
+        _ = GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false, ingress: makeOrdinaryIngress())
 
         #expect(DeviceAuthStore.loadToken(
             deviceId: primaryIdentity.deviceId,
@@ -1549,7 +1593,7 @@ private func waitUntil(
             defer { relaunchedModel.disconnectGateway() }
             let relaunchedController = GatewayConnectionController(
                 appModel: relaunchedModel,
-                startDiscovery: false)
+                startDiscovery: false, ingress: makeOrdinaryIngress())
             relaunchedController._test_triggerAutoConnect()
 
             #expect(!relaunchedController._test_didAutoConnect())
@@ -1718,7 +1762,7 @@ private func waitUntil(
             persistTLSFingerprint: { _, owner in
                 persistedOwnerBytes.withLock { $0 = Array(owner.utf8) }
                 return true
-            })
+            }, ingress: makeOrdinaryIngress())
 
         #expect(await controller.connectWithDiagnostics(gateway) == nil)
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
@@ -1745,7 +1789,7 @@ private func waitUntil(
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in true },
             tlsFingerprintProbe: { _ in .fingerprint("unpersisted-fingerprint") },
-            persistTLSFingerprint: { _, _ in false })
+            persistTLSFingerprint: { _, _ in false }, ingress: makeOrdinaryIngress())
 
         await controller.connectManual(host: host, port: 2, useTLS: true)
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
@@ -1778,7 +1822,10 @@ private func waitUntil(
             password: nil,
             nodeOptions: options)
         appModel.applyGatewayConnectConfig(config)
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
         let error = GatewayTLSValidationError(
             failure: GatewayTLSValidationFailure(
                 kind: .pinMismatch,
@@ -1822,7 +1869,7 @@ private func waitUntil(
                 for await _ in resetRelease.stream {
                     return
                 }
-            })
+            }, ingress: makeOrdinaryIngress())
         var finishedIterator = resetFinished.stream.makeAsyncIterator()
 
         await controller.connectManual(host: host, port: 443, useTLS: true, forceReconnect: true)
@@ -1852,7 +1899,10 @@ private func waitUntil(
             retryable: false,
             pauseReconnect: true)
         appModel.applyOperatorGatewayConnectionProblem(problem)
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         controller.cancelPendingConnectionAttempts()
         for _ in 0..<10 {
@@ -1887,7 +1937,7 @@ private func waitUntil(
                 for await _ in resetRelease.stream {
                     return
                 }
-            })
+            }, ingress: makeOrdinaryIngress())
 
         await controller.connectManual(host: forceHost, port: 18789, useTLS: false, forceReconnect: true)
         // Simulator WebSocket teardown can take several seconds under the aggregate iOS suite.
@@ -1927,7 +1977,10 @@ private func waitUntil(
             }
         }
         appModel._test_setGatewaySessionResetTask(modelResetTask)
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         await controller.connectManual(host: "192.168.1.41", port: 18789, useTLS: false)
         await Task.yield()
@@ -1990,7 +2043,7 @@ private func waitUntil(
                         return reachableRetry && $0.count > 1
                     }
                 },
-                tlsFingerprintProbe: { _ in .fingerprint("replacement-fingerprint") })
+                tlsFingerprintProbe: { _ in .fingerprint("replacement-fingerprint") }, ingress: makeOrdinaryIngress())
             #expect(saveActiveManualGateway(
                 host: "current.gateway.invalid",
                 port: 443,
@@ -2154,7 +2207,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             controller._test_triggerAutoConnect()
             #expect(controller._test_didAutoConnect())
@@ -2181,7 +2237,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             controller._test_triggerAutoConnect()
 
@@ -2216,7 +2275,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             controller._test_triggerAutoConnect()
 
@@ -2299,7 +2361,10 @@ private func waitUntil(
             sessionKey: "main"))
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         await controller.forgetGateway(stableID: stableID)
 
@@ -2320,7 +2385,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             await controller.forgetGateway(stableID: stableID)
 
@@ -2343,7 +2411,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             await controller.forgetGateway(stableID: "manual|forgotten.example.com|443")
 
@@ -2374,7 +2445,10 @@ private func waitUntil(
             url: #require(URL(string: "wss://connected.example.com")),
             stableID: connectedID))
         defer { appModel.disconnectGateway() }
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
         let identity = DeviceIdentityStore.loadOrCreate()
         let resetRelease = AsyncStream<Void>.makeStream()
         let existingReset = Task {
@@ -2432,7 +2506,10 @@ private func waitUntil(
             url: #require(URL(string: "wss://connected.example.com")),
             stableID: connectedID)
         appModel.applyGatewayConnectConfig(connectedConfig)
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         await controller.forgetGateway(stableID: selectedID)
 
@@ -2458,7 +2535,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             defer { appModel.disconnectGateway() }
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
 
             await controller.forgetGateway(stableID: forgottenID)
 
@@ -2569,7 +2649,10 @@ private func waitUntil(
 
     @Test @MainActor func `stale cancellation lease cannot release newer suppression`() {
         let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         let staleLease = controller.cancelPendingConnectionAttempts()
         let currentLease = controller.cancelPendingConnectionAttempts()
@@ -2590,7 +2673,10 @@ private func waitUntil(
         ]) {
             let appModel = NodeAppModel()
             appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             let scannerLease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             #expect(!appModel.gatewayAutoReconnectEnabled)
@@ -2610,7 +2696,10 @@ private func waitUntil(
         withUserDefaults(["gateway.autoconnect": true]) {
             let appModel = NodeAppModel()
             appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             let lease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             controller.releaseAutoConnectSuppression(after: lease)
@@ -2630,7 +2719,10 @@ private func waitUntil(
                 stableID: "manual|127.0.0.1|1")
             appModel.applyGatewayConnectConfig(suspendedConfig)
             appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             let lease = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             UserDefaults.standard.set(false, forKey: "gateway.autoconnect")
@@ -2661,7 +2753,10 @@ private func waitUntil(
                 stableID: "manual|127.0.0.1|1")
             appModel.applyGatewayConnectConfig(suspendedConfig)
             appModel.gatewayAutoReconnectEnabled = true
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             _ = controller.cancelPendingConnectionAttempts(suspendCurrentGateway: true)
 
             await controller.connectManual(host: "invalid.example.com", port: 70000, useTLS: true)
@@ -2701,7 +2796,10 @@ private func waitUntil(
                 }
             }
             appModel._test_setGatewaySessionResetTask(modelResetTask)
-            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+            let controller = GatewayConnectionController(
+                appModel: appModel,
+                startDiscovery: false,
+                ingress: makeOrdinaryIngress())
             UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
 
             let explicitStableID = "manual|192.168.1.41|18789"
@@ -2774,7 +2872,7 @@ private func waitUntil(
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            forceReconnectReset: { _ in })
+            forceReconnectReset: { _ in }, ingress: makeOrdinaryIngress())
 
         let result = await controller.switchToGateway(stableID: stableID)
         await waitUntil { appModel.activeGatewayConnectConfig != nil }
@@ -2800,7 +2898,10 @@ private func waitUntil(
             useTLS: true,
             lastConnectedAtMs: nil))
         let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         let result = await controller.switchToGateway(stableID: discoveredID)
 
@@ -2823,7 +2924,10 @@ private func waitUntil(
             useTLS: true,
             lastConnectedAtMs: nil), activate: true)
         let appModel = NodeAppModel()
-        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            ingress: makeOrdinaryIngress())
 
         let result = await controller.connectActiveGateway()
 
