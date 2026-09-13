@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -26,7 +26,9 @@ from pathlib import Path
 import json, os, sys, zipfile
 mode = sys.argv[1]
 build_type = os.environ['BUILD_TYPE']
-reports = Path('apps/android/app/build/outputs/androidTest-results/connected') / build_type.lower()
+module = os.environ['ACCESS_NATIVE_TEST_MODULE']
+if mode == 'wrong-module': module = 'app' if module == 'access-native-test' else 'access-native-test'
+reports = Path(f'apps/android/{module}/build/outputs/androidTest-results/connected') / build_type.lower()
 reports.mkdir(parents=True)
 names = os.environ['ACCESS_NATIVE_TEST_CLASSES'].split(',')
 if mode == 'wrong-class': names[0] = 'OtherTest'
@@ -54,6 +56,7 @@ with zipfile.ZipFile(apk, 'w') as archive:
       env: {
         ...process.env,
         BUILD_TYPE: buildType,
+        ACCESS_NATIVE_TEST_MODULE: buildType === "Release" ? "access-native-test" : "app",
         ACCESS_NATIVE_TEST_CLASSES:
           buildType === "Release"
             ? "ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest"
@@ -69,7 +72,8 @@ describe("Android Access native workflow", () => {
     expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job.if).toContain("run_android_job == 'true'");
     expect(job.if).toContain("compatibility_target != 'true'");
-    expect(step.run).toContain(":app:connectedPlay${BUILD_TYPE}AndroidTest");
+    expect(step.run).toContain("gradle_tasks=(:app:connectedPlayDebugAndroidTest)");
+    expect(step.run).toContain('"${gradle_tasks[@]}" "${gradle_args[@]}"');
     expect(step.run).toContain('"$native_test_filter"');
     expect(step.run).toContain(
       'native_test_filter="-Pandroid.testInstrumentationRunnerArguments.class=$ACCESS_NATIVE_TEST_CLASSES"',
@@ -112,121 +116,63 @@ describe("Android Access native workflow", () => {
     }
   });
 
-  it("uses the real minified release variant without adding test-only application keeps", () => {
+  it("isolates the Release runner from the app's optimized dependencies", () => {
     expect(step.env.BUILD_TYPE).toBe("${{ matrix.build-type }}");
-    expect(step.run).toContain("androidComponents').finalizeDsl");
-    expect(step.run).toContain("dsl.testBuildType = 'release'");
     expect(step.run).toContain(
-      '--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache --info',
+      "gradle_tasks=(:access-native-test:ktlintCheck :access-native-test:connectedReleaseAndroidTest)",
     );
+    expect(step.run).toContain("gradle_args+=(--no-build-cache --info)");
+    expect(step.run).not.toContain("init-script");
+    expect(step.run).not.toContain("leaveApksInstalledAfterRun");
+    expect(step.run).not.toContain("shell am instrument");
     expect(step.run).toContain("^> Task :app:minifyPlayReleaseWithR8$");
     expect(step.run).toContain("outputs/mapping/playRelease/configuration.txt");
-    expect(step.run).toContain("CloudflareAccessPersistenceNativeTest");
+    const module = readFileSync("apps/android/access-native-test/build.gradle.kts", "utf8");
+    expect(module).toContain("alias(libs.plugins.android.test)");
+    expect(module).toContain('targetProjectPath = ":app"');
+    expect(module).toContain('create("release")');
+    expect(module).toContain('beforeVariants(selector().withBuildType("debug"))');
+    expect(module).toContain("variant.enable = false");
+    expect(module).toContain('signingConfig = signingConfigs.getByName("debug")');
+    expect(module).toContain('missingDimensionStrategy("store", "play")');
+    expect(module).toContain(
+      'experimentalProperties["android.experimental.self-instrumenting"] = true',
+    );
+    expect(module).toContain("implementation(libs.androidx.test.runner)");
+    expect(module).not.toMatch(/(?:implementation|api|compileOnly)\s*\(\s*project/);
+    expect(module).not.toMatch(/jna|sodium/i);
     const fixture = readFileSync(
-      "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessReleaseNativeTest.kt",
+      "apps/android/access-native-test/src/main/java/ai/openclaw/app/gateway/CloudflareAccessReleaseNativeTest.kt",
       "utf8",
     );
     expect(fixture).toContain("ApplicationInfo.FLAG_DEBUGGABLE");
-    expect(fixture).toContain("Native.load(");
-    expect(fixture).toContain("CloudflareSodiumLibrary::class.java");
+    expect(fixture).toContain("Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY");
+    expect(fixture).toContain("assertThrows(ClassNotFoundException::class.java)");
+    expect(fixture).toContain("assertSame(targetLoader, sodium.javaClass.classLoader)");
+    expect(fixture).not.toContain("import com.sun.jna");
     expect(fixture).not.toContain("CloudflareAccessBox");
+    const appRules = readFileSync("apps/android/app/proguard-rules.pro", "utf8");
+    expect(appRules).not.toContain("androidx.tracing.Trace");
+    expect(readFileSync("apps/android/app/build.gradle.kts", "utf8")).not.toContain(
+      "testProguardFile",
+    );
   });
 
-  it.each(["empty", "passed", "missing", "malformed", "uninstalled"])(
-    "keeps the diagnostic replay separate from %s original Release evidence",
-    (mode) => {
-      const root = tempDirs.make("openclaw-access-replay-");
-      const reports = `${root}/apps/android/app/build/outputs/androidTest-results/connected/release`;
-      const mapping = `${root}/apps/android/app/build/outputs/mapping/playReleaseAndroidTest`;
-      const apk = `${root}/apps/android/app/build/outputs/apk/androidTest/play/release`;
-      for (const directory of [reports, mapping, apk]) {
-        mkdirSync(directory, { recursive: true });
-      }
-      const xml =
-        mode === "malformed"
-          ? "<broken"
-          : `<testsuites>${mode === "passed" ? '<testcase classname="original"/>' : ""}</testsuites>`;
-      if (mode !== "missing") {
-        writeFileSync(`${reports}/TEST-device.xml`, xml);
-      }
-      for (const name of ["mapping.txt", "configuration.txt"]) {
-        writeFileSync(`${mapping}/${name}`, "test-owned evidence");
-      }
-      writeFileSync(`${apk}/test.apk`, "test fixture");
-      writeFileSync(
-        `${apk}/output-metadata.json`,
-        JSON.stringify({
-          variantName: "playReleaseAndroidTest",
-          artifactType: { type: "APK" },
-          elements: [{ outputFile: "test.apk", filters: [] }],
-        }),
-      );
-      const start = step.run.indexOf(
-        'if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then\n  # Preserve',
-      );
-      const evidence = step.run.slice(start, step.run.indexOf('apk="$(python3', start));
-      expect(start).toBeGreaterThan(0);
-      expect(evidence).toContain("--signal=TERM --kill-after=2s 60s adb");
-      expect(step.run).toContain(
-        'if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then\n  gradle_args+=(-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true)\nfi',
-      );
-      const result = spawnSync(
-        process.platform === "win32" ? "bash" : "/bin/bash",
-        [
-          "-c",
-          `set -euo pipefail
-test_timeout() { shift 3; "$@"; }
-adb() {
-  case "$*" in
-    '-s emulator-5554 shell pm list instrumentation ai.openclaw.app')
-      if [[ "$REPLAY_FIXTURE_MODE" != uninstalled ]]; then
-        printf '%s\\n' 'instrumentation:ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner (target=ai.openclaw.app)'
-      fi ;;
-    '-s emulator-5554 shell am instrument -r -w -e class ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest -e expectedPageSize 4096 -e additionalTestOutputDir /sdcard/Android/media/ai.openclaw.app/additional_test_output ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner')
-      printf 'invoked\\n' >> "$RUNNER_TEMP/replay-calls"
-      printf 'second execution\\n'
-      printf 'launch error\\n' >&2
-      return 7 ;;
-    '-s emulator-5554 logcat '*) ;;
-    *) return 99 ;;
-  esac
-}
-${evidence.replaceAll("/usr/bin/timeout", "test_timeout")}`,
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          timeout: 5000,
-          env: {
-            ...process.env,
-            RUNNER_TEMP: root,
-            BUILD_TYPE: "Release",
-            EXPECTED_PAGE_SIZE: "4096",
-            REPLAY_FIXTURE_MODE: mode,
-          },
-        },
-      );
-      expect(result.error, result.stderr).toBeUndefined();
-      expect(result.status, result.stderr).toBe(["missing", "malformed"].includes(mode) ? 1 : 0);
-      const output = `${root}/access-release-test-evidence`;
-      expect(existsSync(`${output}/replay.stdout`)).toBe(mode === "empty");
-      if (mode === "empty") {
-        expect(readFileSync(`${root}/replay-calls`, "utf8")).toBe("invoked\n");
-        expect(readFileSync(`${output}/replay.stdout`, "utf8")).toBe("second execution\n");
-        expect(readFileSync(`${output}/replay.stderr`, "utf8")).toBe("launch error\n");
-        expect(readFileSync(`${output}/replay.status`, "utf8")).toBe(
-          "diagnostic second execution; host exit status=7\n",
-        );
-      } else if (mode === "uninstalled") {
-        expect(readFileSync(`${output}/replay.status`, "utf8")).toContain("not run:");
-      } else {
-        expect(existsSync(`${output}/replay.status`)).toBe(false);
-      }
-      if (mode !== "missing") {
-        expect(readFileSync(`${reports}/TEST-device.xml`, "utf8")).toBe(xml);
-      }
-    },
-  );
+  it("retains bounded original runner diagnostics before qualifying XML", () => {
+    const log = step.run.indexOf("logcat -d -v brief -t 500");
+    const verification = step.run.indexOf('apk="$(python3');
+    expect(log).toBeGreaterThan(0);
+    expect(log).toBeLessThan(verification);
+    expect(step.run.slice(log - 100, log)).toContain("--kill-after=2s 30s adb -s emulator-5554");
+    expect(step.run).toContain("AndroidRuntime:E ActivityManager:W '*:S'");
+    const upload = job.steps.find(
+      (entry: { name?: string }) => entry.name === "Upload Access native test reports",
+    );
+    expect(upload.with.path).toContain(
+      "apps/android/access-native-test/build/outputs/androidTest-results/connected/**",
+    );
+    expect(upload.with.path).toContain("access-native-evidence/**");
+  });
 
   it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
     expect(job.strategy).toEqual({
@@ -301,8 +247,13 @@ ${guard}`,
     "wrong-variant",
     "ambiguous-output",
     "outside-output",
+    "wrong-module",
   ])("rejects %s evidence even when Gradle returned success", (mode) => {
-    const result = verifyReports(mode);
-    expect(result.status, result.stderr).not.toBe(0);
+    for (const buildType of mode === "missing-store"
+      ? (["Debug"] as const)
+      : (["Debug", "Release"] as const)) {
+      const result = verifyReports(mode, buildType);
+      expect(result.status, `${buildType}: ${result.stderr}`).not.toBe(0);
+    }
   });
 });

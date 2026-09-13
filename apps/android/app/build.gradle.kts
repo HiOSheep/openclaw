@@ -287,8 +287,6 @@ android {
         debugSymbolLevel = "SYMBOL_TABLE"
       }
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      // Instrumentation has its own shrinker and needs the same JNA/native lookup rules.
-      testProguardFile("proguard-rules.pro")
     }
     debug {
       applicationIdSuffix = ".debug"

@@ -5810,6 +5810,8 @@ jobs:
             test "$(adb -s emulator-5554 shell getprop pm.16kb.app_compat.disabled | tr -d '\r')" = true
           fi
           gradle_args=()
+          gradle_tasks=(:app:connectedPlayDebugAndroidTest)
+          export ACCESS_NATIVE_TEST_MODULE=app
           export ACCESS_NATIVE_TEST_CLASSES=ai.openclaw.app.gateway.CloudflareAccessNativeTest,ai.openclaw.app.gateway.CloudflareAccessPersistenceNativeTest
           # AGP 9.4 splits instrumentation values on commas; quote the exact regex for adb's remote shell.
           native_test_filter="-Pandroid.testInstrumentationRunnerArguments.tests_regex='^ai[.]openclaw[.]app[.]gateway[.](CloudflareAccessNativeTest#packagedSodiumLoadsAndDecryptsTheGoTransferVector|CloudflareAccessPersistenceNativeTest#encryptedGrantRestoresAndDeletesWithoutChangingGatewayPairing)$'"
@@ -5824,85 +5826,24 @@ jobs:
               -storepass "$ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_STORE_PASSWORD" \
               -keypass "$ORG_GRADLE_PROJECT_OPENCLAW_ANDROID_KEY_PASSWORD" \
               -alias access-test -keyalg RSA -keysize 2048 -validity 1 -dname 'CN=OpenClaw CI'
-            cat > "$RUNNER_TEMP/access-test.init.gradle" <<'GRADLE'
-          gradle.beforeProject { project ->
-            if (project.path == ':app') {
-              project.pluginManager.withPlugin('com.android.application') {
-                project.extensions.getByName('androidComponents').finalizeDsl { dsl ->
-                  dsl.testBuildType = 'release'
-                }
-              }
-            }
-          }
-          GRADLE
-            gradle_args+=(--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache --info)
-          fi
-          if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then
-            gradle_args+=(-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true)
+            gradle_args+=(--no-build-cache --info)
+            gradle_tasks=(:access-native-test:ktlintCheck :access-native-test:connectedReleaseAndroidTest)
+            export ACCESS_NATIVE_TEST_MODULE=access-native-test
           fi
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
-            ":app:connectedPlay${BUILD_TYPE}AndroidTest" "${gradle_args[@]}" \
+            "${gradle_tasks[@]}" "${gradle_args[@]}" \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
             "$native_test_filter" \
             -PopenclawBuildCommit="$(git rev-parse HEAD)" \
             -PopenclawBuildTimestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee "$RUNNER_TEMP/access-gradle.log"
           if [[ "$BUILD_TYPE" == Release ]]; then
+            # Preserve startup errors that the test engine can otherwise report as zero successful tests.
+            mkdir -p "$RUNNER_TEMP/access-native-evidence"
+            /usr/bin/timeout --signal=TERM --kill-after=2s 30s adb -s emulator-5554 logcat -d -v brief -t 500 \
+              AndroidJUnitRunner:V TestRunner:V DirectTestLoader:E TestRequestBuilder:V AndroidJUnit4Builder:W AndroidRuntime:E ActivityManager:W '*:S' > "$RUNNER_TEMP/access-native-evidence/runner.log"
             grep -Eq '^> Task :app:minifyPlayReleaseWithR8$' "$RUNNER_TEMP/access-gradle.log"
             test -s apps/android/app/build/outputs/mapping/playRelease/mapping.txt
             test -s apps/android/app/build/outputs/mapping/playRelease/configuration.txt
-          fi
-          if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then
-            # Preserve the test APK's own R8 output; the application mapping cannot prove runner discovery.
-            original_case_count="$(python3 - <<'TEST_APK_EVIDENCE'
-          from pathlib import Path
-          import json
-          import os
-          import shutil
-          import xml.etree.ElementTree as ET
-          evidence = Path(os.environ['RUNNER_TEMP']) / 'access-release-test-evidence'
-          mapping = Path('apps/android/app/build/outputs/mapping/playReleaseAndroidTest')
-          for required in ('mapping.txt', 'configuration.txt'):
-              assert (mapping / required).is_file(), f'Missing test-APK R8 evidence: {required}'
-          (evidence / 'mapping').mkdir(parents=True)
-          for name in ('mapping.txt', 'configuration.txt', 'seeds.txt', 'usage.txt'):
-              source = mapping / name
-              if source.is_file(): shutil.copy2(source, evidence / 'mapping' / name)
-          candidates = [(path, json.loads(path.read_text())) for path in Path('apps/android/app/build/outputs/apk/androidTest').rglob('output-metadata.json')]
-          selected = [(path, data) for path, data in candidates if data['variantName'] == 'playReleaseAndroidTest']
-          assert len(selected) == 1, 'Expected one Release instrumentation output'
-          metadata, data = selected[0]
-          assert data['artifactType']['type'] == 'APK' and len(data['elements']) == 1
-          element = data['elements'][0]
-          name = element['outputFile']
-          assert not element['filters'] and Path(name).name == name and name.endswith('.apk')
-          (evidence / 'androidTest').mkdir()
-          shutil.copy2(metadata.parent / name, evidence / 'androidTest' / name)
-          shutil.copy2(metadata, evidence / 'androidTest' / metadata.name)
-          reports = list(Path('apps/android/app/build/outputs/androidTest-results/connected/release').rglob('*.xml'))
-          assert reports, 'Missing original Release XML; replay is unavailable'
-          print(sum(1 for report in reports for _ in ET.parse(report).getroot().iter('testcase')))
-          TEST_APK_EVIDENCE
-            )"
-            if [[ "$original_case_count" == 0 ]]; then
-              # This second execution preserves stdout discarded by the engine; it cannot qualify the original run.
-              # The host timeout does not stop remote instrumentation; emulator EXIT cleanup owns that lifecycle.
-              if /usr/bin/timeout --signal=TERM --kill-after=2s 15s adb -s emulator-5554 shell pm list instrumentation ai.openclaw.app | \
-                tr -d '\r' | grep -Fxq 'instrumentation:ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner (target=ai.openclaw.app)'; then
-                replay_status=0
-                /usr/bin/timeout --signal=TERM --kill-after=2s 60s adb -s emulator-5554 shell am instrument -r -w \
-                  -e class ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest \
-                  -e expectedPageSize 4096 \
-                  -e additionalTestOutputDir /sdcard/Android/media/ai.openclaw.app/additional_test_output \
-                  ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner \
-                  > "$RUNNER_TEMP/access-release-test-evidence/replay.stdout" \
-                  2> "$RUNNER_TEMP/access-release-test-evidence/replay.stderr" || replay_status=$?
-                printf 'diagnostic second execution; host exit status=%s\n' "$replay_status" > "$RUNNER_TEMP/access-release-test-evidence/replay.status"
-              else
-                printf 'not run: expected installed instrumentation unavailable\n' > "$RUNNER_TEMP/access-release-test-evidence/replay.status"
-              fi
-            fi
-            /usr/bin/timeout --signal=TERM --kill-after=2s 30s adb -s emulator-5554 logcat -d -v brief -t 500 \
-              AndroidJUnitRunner:V TestRunner:V DirectTestLoader:E TestRequestBuilder:V AndroidJUnit4Builder:W AndroidRuntime:E ActivityManager:W '*:S' > "$RUNNER_TEMP/access-release-test-evidence/runner.log"
           fi
           apk="$(python3 - <<'PY'
           from pathlib import Path
@@ -5910,7 +5851,9 @@ jobs:
           import os
           import xml.etree.ElementTree as ET
           import zipfile
-          reports = Path('apps/android/app/build/outputs/androidTest-results/connected').rglob('*.xml')
+          module = os.environ['ACCESS_NATIVE_TEST_MODULE']
+          assert module == ('access-native-test' if os.environ['BUILD_TYPE'] == 'Release' else 'app')
+          reports = Path(f'apps/android/{module}/build/outputs/androidTest-results/connected').rglob('*.xml')
           cases = [case for report in reports for case in ET.parse(report).getroot().iter('testcase')]
           expected_classes = os.environ['ACCESS_NATIVE_TEST_CLASSES'].split(',')
           assert len(cases) == len(expected_classes), 'Every selected native test must execute exactly once'
@@ -5943,9 +5886,11 @@ jobs:
           path: |
             apps/android/app/build/outputs/androidTest-results/connected/**
             apps/android/app/build/reports/androidTests/connected/**
+            apps/android/access-native-test/build/outputs/androidTest-results/connected/**
+            apps/android/access-native-test/build/reports/androidTests/connected/**
             apps/android/app/build/outputs/mapping/playRelease/mapping.txt
             apps/android/app/build/outputs/mapping/playRelease/configuration.txt
-            ${{ runner.temp }}/access-release-test-evidence/**
+            ${{ runner.temp }}/access-native-evidence/**
           if-no-files-found: error
           retention-days: 14
 
