@@ -8,6 +8,14 @@
 -keep class * extends com.sun.jna.* { *; }
 -keepclassmembers class * extends com.sun.jna.* { public *; }
 -keep interface ai.openclaw.app.gateway.CloudflareSodiumLibrary { *; }
+
+# AndroidJUnitRunner's separately shrunk APK calls this shared app class.
+# Test-only keep rules cannot retain code removed from the app APK.
+-keep class androidx.tracing.Trace {
+    public static void beginSection(java.lang.String);
+    public static void endSection();
+    public static void forceEnableAppTracing();
+}
 -dontwarn javax.naming.**
 -dontwarn lombok.Generated
 -dontwarn org.slf4j.impl.StaticLoggerBinder
