@@ -393,7 +393,7 @@ export async function runWithLiveSubagentGateway(
         await start(
           sessionKey,
           [
-            "Please give me a status update only. Check the current state of the delegated work without changing, restarting, or cancelling it.",
+            "Please give me a status update only. Call subagents with action list to inspect the current delegated work before answering, without changing, restarting, or cancelling it.",
             "Use state values queued, running, waiting, completed, failed, timed_out, cancelled, or unknown. Include every worker in the task tree. Distinguish completed work from workers that are still running or waiting, and identify what a waiting worker needs next. Report only results already obtained.",
             `Reply with ${marker} on the first line, then a JSON object with workComplete (boolean) and workers (array of {taskName, state, waitingFor, result}). Use null for an unknown or absent waitingFor/result.`,
             "This status question does not replace the original task or its completion reply.",

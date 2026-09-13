@@ -258,6 +258,7 @@ describeLive("OpenAI subagent yield and operator resume stress", () => {
               ),
               "Call sessions_yield after both are accepted. Continue handling the existing jobs until both have settled, including any failure or cancellation.",
               "Use state values queued, running, waiting, completed, failed, timed_out, cancelled, or unknown. Your final report must distinguish successful retrieval from any unsuccessful worker. workComplete means both requested results were successfully obtained. Never report a result you did not receive.",
+              "Copy received result values and error evidence verbatim, preserving every character of their identifiers in the JSON report.",
               `Reply with ${marker} on the first line, then a JSON object with workComplete (boolean) and workers (array of {taskName, state, waitingFor, result, error}). result is the successfully retrieved value; error is the worker's failure evidence. Use null when absent or unknown.`,
             ].join("\n"),
           );
