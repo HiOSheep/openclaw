@@ -1382,6 +1382,7 @@
   grid-auto-columns: 1fr;
   width: 100%;
   min-width: 0;
+  border-color: var(--border-strong);
 }
 
 .workboard-filter-display .workboard-view-toggle .btn {
