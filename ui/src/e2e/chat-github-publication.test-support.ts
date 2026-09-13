@@ -17,6 +17,7 @@ export const publicationOptions = {
     pending: null,
   },
   pendingPersonal: null,
+  latestShared: null,
 };
 export const publicationMethods = [
   "chat.metadata",

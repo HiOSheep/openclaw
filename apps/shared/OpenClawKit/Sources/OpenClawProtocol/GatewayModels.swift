@@ -13457,18 +13457,22 @@ public struct SessionGitHubConfirmParams: Codable, Sendable {
 public struct SessionGitHubOptionsParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
+    public let idempotencykey: String?
 
     public init(
         sessionkey: String,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        idempotencykey: String? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
+        self.idempotencykey = idempotencykey
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
+        case idempotencykey = "idempotencyKey"
     }
 }
 
@@ -13476,21 +13480,25 @@ public struct SessionGitHubOptionsResult: Codable, Sendable {
     public let personal: AnyCodable
     public let shared: AnyCodable
     public let pendingpersonal: AnyCodable
+    public let latestshared: AnyCodable
 
     public init(
         personal: AnyCodable,
         shared: AnyCodable,
-        pendingpersonal: AnyCodable)
+        pendingpersonal: AnyCodable,
+        latestshared: AnyCodable)
     {
         self.personal = personal
         self.shared = shared
         self.pendingpersonal = pendingpersonal
+        self.latestshared = latestshared
     }
 
     private enum CodingKeys: String, CodingKey {
         case personal
         case shared
         case pendingpersonal = "pendingPersonal"
+        case latestshared = "latestShared"
     }
 }
 

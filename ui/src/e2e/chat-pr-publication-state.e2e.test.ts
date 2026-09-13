@@ -155,4 +155,107 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     });
   });
+
+  it("recovers shared receipts and observes committed status without publishing", async () => {
+    await suite.withPage(publicationContextOptions(), async ({ page }) => {
+      const repository = { owner: "synthetic", repo: "publication-demo" };
+      const branch = "openclaw/shared-read-proof";
+      const publisher = publicationOptions.shared;
+      const requestId = "bdca439a-e787-4f9f-b5f3-a878c662cc77";
+      const accepted = {
+        requestId,
+        publisher,
+        status: "requested",
+        message: "The shared publication was accepted.",
+      };
+      const published = {
+        requestId,
+        publisher,
+        status: "published",
+        repository: "synthetic/publication-demo",
+        branch,
+        headCommit: "a".repeat(40),
+        url: "https://github.com/synthetic/publication-demo/pull/44",
+      };
+      const completed = { result: published, confirmation: null };
+      const gateway = await installMockGateway(page, {
+        communityInvite: false,
+        featureMethods: [...publicationMethods, "sessions.subscribe"],
+        deferredMethods: ["sessions.github.status"],
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+          "sessions.subscribe": { subscribed: true },
+          "sessions.github.options": {
+            ...publicationOptions,
+            latestShared: { result: accepted, confirmation: null },
+          },
+          "sessions.github.status": completed,
+        },
+      });
+      const showBranch = async () => {
+        const key = await waitForWatchedSessionKey(gateway);
+        await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+          sessions: {
+            [key]: {
+              repository,
+              branch: { ...repository, branch, additions: 9, deletions: 2 },
+              pullRequests: [],
+              rateLimited: false,
+              status: "ready",
+            },
+          },
+        });
+        return key;
+      };
+      await page.goto(suite.server.baseUrl + "chat");
+      const key = await showBranch();
+      const optionsRequest = await gateway.waitForRequest("sessions.github.options");
+      const target = optionsRequest.params as { sessionKey: string; agentId?: string };
+      expect(target.sessionKey).toBe(key);
+      await page.locator(".chat-pr__publication-outcome[data-state=requested]").waitFor();
+      for (let index = 0; index < 5; index += 1) {
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...target,
+          reason: "github-publication",
+        });
+      }
+      await gateway.waitForRequest("sessions.github.status");
+      expect(await gateway.getRequests("sessions.github.status")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+      await gateway.setMethodResponse("sessions.github.options", {
+        ...publicationOptions,
+        latestShared: completed,
+      });
+      await gateway.resolveDeferred("sessions.github.status", completed);
+      await page.locator(".chat-pr__publication-outcome[data-state=published]").waitFor();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.github.options")).length)
+        .toBe(2);
+      expect(await page.locator(".chat-prs a.chat-pr__create").getAttribute("href")).toBe(
+        published.url,
+      );
+      const beforeReconnect = (await gateway.getRequests("sessions.github.options")).length;
+      const watchedBefore = (await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD))
+        .length;
+      await gateway.setGatewayBootId("shared-publication-restart");
+      await gateway.closeLatest(1012, "Gateway restart");
+      await gateway.waitForRequest(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
+        after: watchedBefore,
+      });
+      await showBranch();
+      await gateway.waitForRequest("sessions.github.options", { after: beforeReconnect });
+      await page.locator(".chat-pr__publication-outcome[data-state=published]").waitFor();
+      if (captureUiProof) {
+        const row = page.locator(".chat-prs");
+        await writeFile(
+          path.join(suite.artifactDir, "shared-publication-reconnected.png"),
+          await takeControlUiViewportScreenshot(page, row, [row.locator("a.chat-pr__create")]),
+        );
+      }
+      await page.getByRole("button", { name: "Choose a new publication", exact: true }).click();
+      await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
+    });
+  });
 });

@@ -293,6 +293,7 @@ describe("explicit GitHub publication", () => {
       shared: { ...shared, login: "other-system" },
       personal: null,
       pendingPersonal: null,
+      latestShared: null,
     };
     request.mockResolvedValueOnce(nextOptions);
     controller.sync({ ...scope, key: "gateway:bob:session:2" });
@@ -425,7 +426,7 @@ describe("explicit GitHub publication", () => {
   );
 
   it("offers shared publication without a personal owner and never auto-selects personal when shared is absent", async () => {
-    const unbound = setup({ shared, personal: null, pendingPersonal: null });
+    const unbound = setup({ shared, personal: null, pendingPersonal: null, latestShared: null });
     expect((await settled(unbound.controller)).selection).toEqual({
       source: "shared",
       expected: shared,

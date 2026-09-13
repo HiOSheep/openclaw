@@ -88,6 +88,7 @@ function createPublicationPane(scope?: "global" | "per-sender") {
     shared,
     personal: { state: "connected", generation, account },
     pendingPersonal: null,
+    latestShared: null,
   };
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method === "sessions.github.options") {

@@ -27,6 +27,7 @@ export const options: GitHubPublicationOptions = {
     pending: null,
   },
   pendingPersonal: null,
+  latestShared: null,
 };
 export const confirmation = {
   account,

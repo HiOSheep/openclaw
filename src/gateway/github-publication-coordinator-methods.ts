@@ -3,6 +3,7 @@ import type {
   GitHubPublicationPublisher,
   SessionGitHubPublicationResult,
   SessionGitHubPublishParams,
+  SessionGitHubStatusResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
@@ -21,6 +22,11 @@ import {
 } from "./github-publication-availability.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import {
+  readSharedGitHubPublicationSession,
+  type SharedGitHubPublicationSession,
+  type SharedGitHubPublicationSelector,
+} from "./github-publication-shared-read.js";
+import {
   deferGitHubPublicationRequests as deferRequests,
   digestGitHubPublicationRequest as digestRequest,
   insertGitHubPublicationRequest,
@@ -30,6 +36,7 @@ import {
   listGitHubPublicationsForClaim,
   projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
+  readSharedGitHubPublicationRequest,
   type GitHubPublicationRow as PublicationRow,
 } from "./github-publication-store.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
@@ -70,6 +77,42 @@ export function exactClaimForPlacement(
   };
 }
 
+export function createSharedGitHubPublicationReadMethods(
+  readReceipt: (
+    ...args: Parameters<typeof readSharedGitHubPublicationRequest>
+  ) => Parameters<typeof publicationResult>[0] | undefined,
+) {
+  const readShared = (
+    session: SharedGitHubPublicationSession,
+    selector: SharedGitHubPublicationSelector,
+  ) =>
+    readReceipt(
+      session,
+      selector,
+      readSharedGitHubPublicationSession(
+        session,
+        loadGatewaySessionEntryReadOnly(session.sessionKey, { agentId: session.agentId }),
+      ),
+    );
+  return {
+    sharedStatus(
+      session: SharedGitHubPublicationSession,
+      requestId: string,
+    ): SessionGitHubStatusResult | undefined {
+      const row = readShared(session, { requestId });
+      return row ? { result: publicationResult(row), confirmation: null } : undefined;
+    },
+
+    latestShared(
+      session: SharedGitHubPublicationSession,
+      idempotencyKey?: string,
+    ): SessionGitHubStatusResult | null {
+      const row = readShared(session, { idempotencyKey });
+      return row ? { result: publicationResult(row), confirmation: null } : null;
+    },
+  };
+}
+
 export function createGitHubPublicationCoordinatorMethods(params: {
   placements: WorkerSessionPlacementStore;
   readById: (requestId: string) => PublicationRow | undefined;
@@ -86,6 +129,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
   ) => Promise<SessionGitHubPublicationResult>;
 }) {
   const { readById, requestForClaim, sameWorktree, processRow } = params;
+
   return {
     async requestForSession(
       input: SessionGitHubPublishParams & {
@@ -439,6 +483,8 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         })),
       ];
     },
+
+    ...createSharedGitHubPublicationReadMethods(readSharedGitHubPublicationRequest),
 
     read(requestId: string): SessionGitHubPublicationResult | undefined {
       const row = readById(requestId);

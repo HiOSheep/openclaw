@@ -93,8 +93,7 @@ function renderPublicationButton(publication: GitHubPublicationView) {
     };
   } else if (result?.status === "publishing" || result?.status === "requested") {
     action = {
-      click:
-        result.publisher?.source === "personal" ? publication.onRefresh : publication.onPublish,
+      click: publication.onRefresh,
       label: busy ? pendingLabel : t("githubPublication.check"),
       disabled: busy,
     };

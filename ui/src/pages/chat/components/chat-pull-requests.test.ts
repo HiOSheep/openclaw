@@ -444,7 +444,7 @@ describe("renderChatPullRequests", () => {
           onExpand: () => {},
           onDismiss: () => {},
           publication: publication({
-            options: { shared, personal: null, pendingPersonal: null },
+            options: { shared, personal: null, pendingPersonal: null, latestShared: null },
             selection: { source: "shared", expected: shared },
             onSelect,
           }),
