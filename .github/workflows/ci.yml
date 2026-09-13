@@ -5837,6 +5837,9 @@ jobs:
           GRADLE
             gradle_args+=(--init-script "$RUNNER_TEMP/access-test.init.gradle" --no-build-cache --info)
           fi
+          if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then
+            gradle_args+=(-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true)
+          fi
           node --import ./scripts/tsx.mjs scripts/run-android-gradle.mts \
             ":app:connectedPlay${BUILD_TYPE}AndroidTest" "${gradle_args[@]}" \
             -Pandroid.testInstrumentationRunnerArguments.expectedPageSize="$EXPECTED_PAGE_SIZE" \
@@ -5850,11 +5853,12 @@ jobs:
           fi
           if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then
             # Preserve the test APK's own R8 output; the application mapping cannot prove runner discovery.
-            python3 - <<'TEST_APK_EVIDENCE'
+            original_case_count="$(python3 - <<'TEST_APK_EVIDENCE'
           from pathlib import Path
           import json
           import os
           import shutil
+          import xml.etree.ElementTree as ET
           evidence = Path(os.environ['RUNNER_TEMP']) / 'access-release-test-evidence'
           mapping = Path('apps/android/app/build/outputs/mapping/playReleaseAndroidTest')
           for required in ('mapping.txt', 'configuration.txt'):
@@ -5874,7 +5878,29 @@ jobs:
           (evidence / 'androidTest').mkdir()
           shutil.copy2(metadata.parent / name, evidence / 'androidTest' / name)
           shutil.copy2(metadata, evidence / 'androidTest' / metadata.name)
+          reports = list(Path('apps/android/app/build/outputs/androidTest-results/connected/release').rglob('*.xml'))
+          assert reports, 'Missing original Release XML; replay is unavailable'
+          print(sum(1 for report in reports for _ in ET.parse(report).getroot().iter('testcase')))
           TEST_APK_EVIDENCE
+            )"
+            if [[ "$original_case_count" == 0 ]]; then
+              # This second execution preserves stdout discarded by the engine; it cannot qualify the original run.
+              # The host timeout does not stop remote instrumentation; emulator EXIT cleanup owns that lifecycle.
+              if /usr/bin/timeout --signal=TERM --kill-after=2s 15s adb -s emulator-5554 shell pm list instrumentation ai.openclaw.app | \
+                tr -d '\r' | grep -Fxq 'instrumentation:ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner (target=ai.openclaw.app)'; then
+                replay_status=0
+                /usr/bin/timeout --signal=TERM --kill-after=2s 60s adb -s emulator-5554 shell am instrument -r -w \
+                  -e class ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest \
+                  -e expectedPageSize 4096 \
+                  -e additionalTestOutputDir /sdcard/Android/media/ai.openclaw.app/additional_test_output \
+                  ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner \
+                  > "$RUNNER_TEMP/access-release-test-evidence/replay.stdout" \
+                  2> "$RUNNER_TEMP/access-release-test-evidence/replay.stderr" || replay_status=$?
+                printf 'diagnostic second execution; host exit status=%s\n' "$replay_status" > "$RUNNER_TEMP/access-release-test-evidence/replay.status"
+              else
+                printf 'not run: expected installed instrumentation unavailable\n' > "$RUNNER_TEMP/access-release-test-evidence/replay.status"
+              fi
+            fi
             /usr/bin/timeout --signal=TERM --kill-after=2s 30s adb -s emulator-5554 logcat -d -v brief -t 500 \
               AndroidJUnitRunner:V TestRunner:V DirectTestLoader:E TestRequestBuilder:V AndroidJUnit4Builder:W AndroidRuntime:E ActivityManager:W '*:S' > "$RUNNER_TEMP/access-release-test-evidence/runner.log"
           fi

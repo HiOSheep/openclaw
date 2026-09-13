@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -131,6 +131,102 @@ describe("Android Access native workflow", () => {
     expect(fixture).toContain("CloudflareSodiumLibrary::class.java");
     expect(fixture).not.toContain("CloudflareAccessBox");
   });
+
+  it.each(["empty", "passed", "missing", "malformed", "uninstalled"])(
+    "keeps the diagnostic replay separate from %s original Release evidence",
+    (mode) => {
+      const root = tempDirs.make("openclaw-access-replay-");
+      const reports = `${root}/apps/android/app/build/outputs/androidTest-results/connected/release`;
+      const mapping = `${root}/apps/android/app/build/outputs/mapping/playReleaseAndroidTest`;
+      const apk = `${root}/apps/android/app/build/outputs/apk/androidTest/play/release`;
+      for (const directory of [reports, mapping, apk]) {
+        mkdirSync(directory, { recursive: true });
+      }
+      const xml =
+        mode === "malformed"
+          ? "<broken"
+          : `<testsuites>${mode === "passed" ? '<testcase classname="original"/>' : ""}</testsuites>`;
+      if (mode !== "missing") {
+        writeFileSync(`${reports}/TEST-device.xml`, xml);
+      }
+      for (const name of ["mapping.txt", "configuration.txt"]) {
+        writeFileSync(`${mapping}/${name}`, "test-owned evidence");
+      }
+      writeFileSync(`${apk}/test.apk`, "test fixture");
+      writeFileSync(
+        `${apk}/output-metadata.json`,
+        JSON.stringify({
+          variantName: "playReleaseAndroidTest",
+          artifactType: { type: "APK" },
+          elements: [{ outputFile: "test.apk", filters: [] }],
+        }),
+      );
+      const start = step.run.indexOf(
+        'if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then\n  # Preserve',
+      );
+      const evidence = step.run.slice(start, step.run.indexOf('apk="$(python3', start));
+      expect(start).toBeGreaterThan(0);
+      expect(evidence).toContain("--signal=TERM --kill-after=2s 60s adb");
+      expect(step.run).toContain(
+        'if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then\n  gradle_args+=(-Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true)\nfi',
+      );
+      const result = spawnSync(
+        process.platform === "win32" ? "bash" : "/bin/bash",
+        [
+          "-c",
+          `set -euo pipefail
+test_timeout() { shift 3; "$@"; }
+adb() {
+  case "$*" in
+    '-s emulator-5554 shell pm list instrumentation ai.openclaw.app')
+      if [[ "$REPLAY_FIXTURE_MODE" != uninstalled ]]; then
+        printf '%s\\n' 'instrumentation:ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner (target=ai.openclaw.app)'
+      fi ;;
+    '-s emulator-5554 shell am instrument -r -w -e class ai.openclaw.app.gateway.CloudflareAccessReleaseNativeTest -e expectedPageSize 4096 -e additionalTestOutputDir /sdcard/Android/media/ai.openclaw.app/additional_test_output ai.openclaw.app.test/androidx.test.runner.AndroidJUnitRunner')
+      printf 'invoked\\n' >> "$RUNNER_TEMP/replay-calls"
+      printf 'second execution\\n'
+      printf 'launch error\\n' >&2
+      return 7 ;;
+    '-s emulator-5554 logcat '*) ;;
+    *) return 99 ;;
+  esac
+}
+${evidence.replaceAll("/usr/bin/timeout", "test_timeout")}`,
+        ],
+        {
+          cwd: root,
+          encoding: "utf8",
+          timeout: 5000,
+          env: {
+            ...process.env,
+            RUNNER_TEMP: root,
+            BUILD_TYPE: "Release",
+            EXPECTED_PAGE_SIZE: "4096",
+            REPLAY_FIXTURE_MODE: mode,
+          },
+        },
+      );
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(["missing", "malformed"].includes(mode) ? 1 : 0);
+      const output = `${root}/access-release-test-evidence`;
+      expect(existsSync(`${output}/replay.stdout`)).toBe(mode === "empty");
+      if (mode === "empty") {
+        expect(readFileSync(`${root}/replay-calls`, "utf8")).toBe("invoked\n");
+        expect(readFileSync(`${output}/replay.stdout`, "utf8")).toBe("second execution\n");
+        expect(readFileSync(`${output}/replay.stderr`, "utf8")).toBe("launch error\n");
+        expect(readFileSync(`${output}/replay.status`, "utf8")).toBe(
+          "diagnostic second execution; host exit status=7\n",
+        );
+      } else if (mode === "uninstalled") {
+        expect(readFileSync(`${output}/replay.status`, "utf8")).toContain("not run:");
+      } else {
+        expect(existsSync(`${output}/replay.status`)).toBe(false);
+      }
+      if (mode !== "missing") {
+        expect(readFileSync(`${reports}/TEST-device.xml`, "utf8")).toBe(xml);
+      }
+    },
+  );
 
   it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
     expect(job.strategy).toEqual({
