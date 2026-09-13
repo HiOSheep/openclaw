@@ -5848,6 +5848,36 @@ jobs:
             test -s apps/android/app/build/outputs/mapping/playRelease/mapping.txt
             test -s apps/android/app/build/outputs/mapping/playRelease/configuration.txt
           fi
+          if [[ "$BUILD_TYPE/$EXPECTED_PAGE_SIZE" == Release/4096 ]]; then
+            # Preserve the test APK's own R8 output; the application mapping cannot prove runner discovery.
+            python3 - <<'TEST_APK_EVIDENCE'
+          from pathlib import Path
+          import json
+          import os
+          import shutil
+          evidence = Path(os.environ['RUNNER_TEMP']) / 'access-release-test-evidence'
+          mapping = Path('apps/android/app/build/outputs/mapping/playReleaseAndroidTest')
+          for required in ('mapping.txt', 'configuration.txt'):
+              assert (mapping / required).is_file(), f'Missing test-APK R8 evidence: {required}'
+          (evidence / 'mapping').mkdir(parents=True)
+          for name in ('mapping.txt', 'configuration.txt', 'seeds.txt', 'usage.txt'):
+              source = mapping / name
+              if source.is_file(): shutil.copy2(source, evidence / 'mapping' / name)
+          candidates = [(path, json.loads(path.read_text())) for path in Path('apps/android/app/build/outputs/apk/androidTest').rglob('output-metadata.json')]
+          selected = [(path, data) for path, data in candidates if data['variantName'] == 'playReleaseAndroidTest']
+          assert len(selected) == 1, 'Expected one Release instrumentation output'
+          metadata, data = selected[0]
+          assert data['artifactType']['type'] == 'APK' and len(data['elements']) == 1
+          element = data['elements'][0]
+          name = element['outputFile']
+          assert not element['filters'] and Path(name).name == name and name.endswith('.apk')
+          (evidence / 'androidTest').mkdir()
+          shutil.copy2(metadata.parent / name, evidence / 'androidTest' / name)
+          shutil.copy2(metadata, evidence / 'androidTest' / metadata.name)
+          TEST_APK_EVIDENCE
+            /usr/bin/timeout --signal=TERM --kill-after=2s 30s adb -s emulator-5554 logcat -d -v brief -t 500 \
+              AndroidJUnitRunner:V TestRunner:V DirectTestLoader:E TestRequestBuilder:V AndroidJUnit4Builder:W AndroidRuntime:E '*:S' > "$RUNNER_TEMP/access-release-test-evidence/runner.log"
+          fi
           apk="$(python3 - <<'PY'
           from pathlib import Path
           import json
@@ -5889,6 +5919,7 @@ jobs:
             apps/android/app/build/reports/androidTests/connected/**
             apps/android/app/build/outputs/mapping/playRelease/mapping.txt
             apps/android/app/build/outputs/mapping/playRelease/configuration.txt
+            ${{ runner.temp }}/access-release-test-evidence/**
           if-no-files-found: error
           retention-days: 14
 
