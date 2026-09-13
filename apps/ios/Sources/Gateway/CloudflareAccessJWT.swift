@@ -128,10 +128,13 @@ enum CloudflareAccessJWT {
             throw CloudflareAccessError.invalidSession
         }
         let der = self.der(tag: 0x30, data: self.integer(n) + self.integer(e))
-        guard let publicKey = SecKeyCreateWithData(der as CFData, [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
-        ] as CFDictionary, nil),
+        guard let publicKey = SecKeyCreateWithData(
+            der as CFData,
+            [
+                kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+                kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+            ] as CFDictionary,
+            nil),
             try SecKeyVerifySignature(
                 publicKey,
                 .rsaSignatureMessagePKCS1v15SHA256,
