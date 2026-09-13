@@ -1298,10 +1298,7 @@ extension GatewayChannelActor {
         storedToken: String?,
         attemptedDeviceTokenRetry: Bool) -> Bool
     {
-        if self.deviceTokenRetryBudgetUsed {
-            return false
-        }
-        if attemptedDeviceTokenRetry {
+        if self.deviceTokenRetryBudgetUsed || attemptedDeviceTokenRetry {
             return false
         }
         guard explicitGatewayToken != nil, storedToken != nil else {
