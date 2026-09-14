@@ -221,6 +221,7 @@ export type CronState = {
   cronJobsSortBy: CronJobsSortBy;
   cronJobsSortDir: CronSortDir;
   cronAgentId: string | null;
+  cronSessionFilter?: { sessionKey: string; agentId: string };
   cronStatus: CronStatus | null;
   cronScopedTotal: number | null;
   cronScopedNextWakeAtMs: number | null;
@@ -690,6 +691,7 @@ export async function loadCronJobsPage(
     const offset = append ? Math.max(0, state.cronJobsNextOffset ?? state.cronJobs.length) : 0;
     const res = await state.client.request<CronJobsListResult>("cron.list", {
       ...(state.cronAgentId ? { agentId: state.cronAgentId } : {}),
+      ...state.cronSessionFilter,
       includeDisabled: state.cronJobsEnabledFilter === "all",
       includeDeliveryPreviews: false,
       limit: state.cronJobsLimit,

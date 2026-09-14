@@ -5822,6 +5822,8 @@ export const en: TranslationMap & {
     },
     list: {
       viewLabel: "Automation views",
+      sessionFilter: "Automations attached to this session.",
+      showAll: "Show all automations",
       searchPlaceholder: "Search automations",
       newTask: "New automation",
       filters: "Filters",
