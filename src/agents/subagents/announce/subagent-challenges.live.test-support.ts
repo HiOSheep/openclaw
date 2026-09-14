@@ -3,10 +3,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect } from "vitest";
+import { acquireGatewayTestClient } from "../../../../test/helpers/gateway-client.js";
 import { runQaGatewayFixture } from "../../../../test/helpers/qa-gateway-cleanup.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { GatewayClient } from "../../../gateway/client.js";
+import type { GatewayClient } from "../../../gateway/client.js";
 import { startGatewayServer, type GatewayServer } from "../../../gateway/server.js";
 import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import { redactSecrets } from "../../../logging/redact.js";
@@ -216,23 +217,6 @@ export function gateTask(url: string): string {
   ].join(" ");
 }
 
-async function connect(port: number, token: string): Promise<GatewayClient> {
-  return await new Promise((resolve, reject) => {
-    const client = new GatewayClient({
-      url: `ws://127.0.0.1:${port}`,
-      token,
-      deviceIdentity: null,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      scopes: ["operator.admin"],
-      requestTimeoutMs: WAIT_MS,
-      onHelloOk: () => resolve(client),
-      onConnectError: reject,
-    });
-    client.start();
-  });
-}
-
 type LiveSubagentContext = {
   gateway: GatewayClient;
   state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -365,7 +349,22 @@ export async function runWithLiveSubagentGateway(
         controlUiEnabled: false,
       });
       await server.startupSettled;
-      const gateway = await connect(port, token);
+      const gateway = await acquireGatewayTestClient(
+        {
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          deviceIdentity: null,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          scopes: ["operator.admin"],
+          requestTimeoutMs: WAIT_MS,
+        },
+        {
+          timeoutMs: WAIT_MS,
+          timeoutMessage: "Live subagent Gateway client did not connect",
+          closeMessage: "Live subagent Gateway closed before connecting",
+        },
+      );
       client = gateway;
       const record = (phase: string, facts: Record<string, unknown>) => {
         evidence.push({ phase, at: Date.now(), ...facts });
