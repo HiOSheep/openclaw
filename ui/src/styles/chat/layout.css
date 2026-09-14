@@ -645,13 +645,13 @@ openclaw-chat-page {
   width: 100%;
 }
 
-/* Browser flow preserves adjacency even when smooth scrolling skips a row's
-   measurement. flow-root includes child margins in each measured row. */
+/* The virtualizer already bounds mounted rows. Keep those rows measurable so
+   compact layouts, jumps, and restored panes do not use skipped-content sizes.
+   flow-root includes child margins while browser flow preserves adjacency. */
 .chat-virtual-row {
   position: relative;
   display: flow-root;
   width: 100%;
-  content-visibility: auto;
 }
 
 .chat-virtual-row--first > :first-child {
