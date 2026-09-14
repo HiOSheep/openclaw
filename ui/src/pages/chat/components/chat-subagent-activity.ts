@@ -6,6 +6,7 @@ import remend from "remend";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { isActiveTask, sortTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import {
@@ -13,6 +14,8 @@ import {
   backgroundTaskIsExecuting,
   backgroundTaskStatusLabel,
 } from "./chat-background-tasks-shared.ts";
+
+registerBackgroundTasksEnglish();
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;

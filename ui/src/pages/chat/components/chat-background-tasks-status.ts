@@ -3,6 +3,7 @@ import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
@@ -18,6 +19,8 @@ import {
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { renderSubagentActivity } from "./chat-subagent-activity.ts";
+
+registerBackgroundTasksEnglish();
 
 type BackgroundTasksStatus = { count: number; startedMs: number | null };
 

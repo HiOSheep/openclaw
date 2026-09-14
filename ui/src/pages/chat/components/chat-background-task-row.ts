@@ -3,6 +3,7 @@ import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
   isActiveTask,
@@ -20,6 +21,8 @@ import {
   STATUS_TONES,
 } from "./chat-background-tasks-shared.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+
+registerBackgroundTasksEnglish();
 
 type TaskDisplayFacts = {
   active: boolean;

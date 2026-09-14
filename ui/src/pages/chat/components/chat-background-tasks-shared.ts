@@ -1,6 +1,9 @@
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { isActiveTask, taskStatusLabel } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+
+registerBackgroundTasksEnglish();
 
 export { newestTaskSnapshot } from "../../../lib/tasks/data.ts";
 

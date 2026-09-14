@@ -5,6 +5,7 @@ import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerBackgroundTasksEnglish } from "../../../i18n/locales/en-background-tasks.ts";
 import { uiConversationMatches } from "../../../lib/sessions/session-key.ts";
 import {
   isActiveTask,
@@ -35,6 +36,8 @@ import {
   retryTaskTranscript,
   type TaskDetailHost,
 } from "./chat-task-detail-state.ts";
+
+registerBackgroundTasksEnglish();
 
 export function renderTaskDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
