@@ -230,6 +230,10 @@ opens or focuses an existing Gateway window without reloading its current page;
 selection is remembered across app restarts. Removing a selected Gateway returns
 the main window to Primary and closes that Gateway's other windows.
 
+If a saved Gateway cannot load, its window returns to the local connection editor
+so you can correct the address or credentials. An edited endpoint becomes the
+remembered selection only after its dashboard loads successfully.
+
 Selecting a dashboard does not change the **Primary Gateway**, Quick Chat, or the
 desktop connection. **Set as Primary** is a separate, confirmed action for saved
 token-authenticated connections. Primary reconnects leave independently selected

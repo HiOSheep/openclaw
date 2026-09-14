@@ -4,7 +4,6 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use tauri::ipc::CapabilityBuilder;
-use tauri::webview::{PageLoadEvent, PageLoadPayload};
 use tauri::{AppHandle, Manager, State, Url, Webview};
 use tauri_plugin_opener::OpenerExt;
 
@@ -264,7 +263,7 @@ pub fn publication_script(app: &AppHandle, serialized_state: &str) -> Option<Str
     ))
 }
 
-pub fn page_load(webview: Webview, payload: PageLoadPayload<'_>, document_token: Option<&str>) {
+pub fn page_load(webview: Webview, started: bool, document_token: Option<&str>) {
     let app = webview.app_handle().clone();
     let Some(bridge) = app.try_state::<NativeBrowserBridgeState>() else {
         return;
@@ -284,7 +283,7 @@ pub fn page_load(webview: Webview, payload: PageLoadPayload<'_>, document_token:
         {
             return;
         }
-        if matches!(payload.event(), PageLoadEvent::Started) {
+        if started {
             state.generation = state.generation.wrapping_add(1);
             let generation = state.generation;
             if let Some(document) = state.document.as_mut() {
@@ -294,7 +293,6 @@ pub fn page_load(webview: Webview, payload: PageLoadPayload<'_>, document_token:
         }
         (state.generation, state.reset_pending)
     };
-    let started = matches!(payload.event(), PageLoadEvent::Started);
     if started {
         crate::window_chrome::loading(&webview);
     }

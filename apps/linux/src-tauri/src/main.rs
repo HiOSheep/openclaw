@@ -1655,9 +1655,14 @@ impl DesktopState {
         url: Url,
         reveal_window: bool,
     ) -> Result<(), String> {
-        main_window(app)?
-            .navigate(url)
-            .map_err(|error| format!("Could not open dashboard: {error}"))?;
+        let view = main_window(app)?;
+        if !app
+            .state::<gateway_windows::GatewayWindows>()
+            .navigate_document(&view, url.clone())?
+        {
+            view.navigate(url)
+                .map_err(|error| format!("Could not open dashboard: {error}"))?;
+        }
         if reveal_window {
             tray::show_window(app);
         }
@@ -2754,6 +2759,62 @@ pub(crate) async fn promote_gateway_profile(
         .map(|_| ())
 }
 
+// Called on the native thread after the window owner retires the failed document.
+pub(crate) fn recover_primary_navigation(
+    app: &AppHandle,
+    failed_label: &str,
+    error: &str,
+    present: bool,
+) -> Result<(), String> {
+    let state = app.state::<DesktopState>();
+    if state.is_quitting() {
+        return Ok(());
+    }
+    let snapshot = GatewaySnapshot::remote_error(error.to_string());
+    if failed_label != "main" {
+        if present {
+            state.show_connection_settings(app)?;
+        }
+        let mut navigation = state.inner.navigation.lock().expect("navigation");
+        navigation.record_remote_failure(snapshot.clone(), None);
+        drop(navigation);
+        state.update_tray(&snapshot);
+        if !present {
+            notify::notify(app, "Primary Gateway unavailable", error);
+        }
+        return Ok(());
+    }
+
+    let mut navigation = state.inner.navigation.lock().expect("navigation");
+    let mut recovery = state.inner.local_url.clone();
+    recovery
+        .query_pairs_mut()
+        .clear()
+        .append_pair("mode", "remoteError");
+    // Back must return to local recovery, never to the failed browser document.
+    navigation.settings_return = None;
+    navigation.begin_settings(
+        app.state::<GatewayOperationQueue>().current_selection(),
+        SettingsReturnTarget::Local(recovery),
+    )?;
+    navigation.record_remote_failure(snapshot.clone(), None);
+    navigation.remote_snapshot = Some(snapshot.clone());
+    let mut settings = state.inner.local_url.clone();
+    settings
+        .query_pairs_mut()
+        .clear()
+        .append_pair("mode", "connectionSettings");
+    app.state::<native_browser_bridge::NativeBrowserBridgeState>()
+        .clear(app);
+    replace_main_webview(app, settings, None, None)?;
+    drop(navigation);
+    state.update_tray(&snapshot);
+    if present {
+        tray::show_window(app);
+    }
+    Ok(())
+}
+
 pub(crate) fn replace_dashboard_webview(
     app: &AppHandle,
     url: Url,
@@ -2834,7 +2895,12 @@ fn replace_main_webview_for_target(
         script.push('\n');
         script.push_str(&registration.script);
     }
-    let builder = WebviewBuilder::new("main", WebviewUrl::External(url))
+    let initial_url = registration
+        .as_ref()
+        .map_or(WebviewUrl::External(url), |registration| {
+            registration.initial_url()
+        });
+    let builder = WebviewBuilder::new("main", initial_url)
         .incognito(target.is_some_and(|target| target != gateway_windows::PRIMARY))
         .initialization_script(script)
         .on_new_window(move |url, _| {
@@ -2845,65 +2911,54 @@ fn replace_main_webview_for_target(
         Some(registration) => registration.configure(builder),
         None => builder,
     };
+    let startup_registration = registration.clone();
+    let readiness_token = document_token.clone();
     let builder = builder
         .on_page_load(move |webview, payload| {
             let loaded = matches!(payload.event(), PageLoadEvent::Finished);
             let app = webview.app_handle().clone();
             if let Some(registration) = &registration {
-                registration.page_load(webview.clone(), !loaded);
+                registration.page_load(webview.clone(), payload.url(), !loaded);
+                if payload.url().as_str() == "about:blank" || loaded {
+                    return;
+                }
             } else {
                 gateway_windows::local_page_load(webview.clone(), !loaded);
             }
-            native_browser_bridge::page_load(webview, payload, document_token.as_deref());
-            if remote_generation.is_some() || (loaded && registration.is_some()) {
+            native_browser_bridge::page_load(webview, !loaded, document_token.as_deref());
+            if remote_generation.is_some() && !loaded {
                 let state = app.state::<DesktopState>().inner().clone();
                 let current_app = app.clone();
                 let expected_document = document_token.clone();
                 let on_load = move || {
-                    if state.is_quitting() {
-                        return;
-                    }
-                    let current_dashboard = loaded
-                        && expected_document.is_some()
-                        && current_app
+                    if state.is_quitting()
+                        || current_app
                             .state::<native_browser_bridge::NativeBrowserBridgeState>()
                             .document_token()
-                            == expected_document
-                        && current_app
-                            .get_webview("main")
-                            .and_then(|view| view.url().ok())
-                            .is_some_and(|url| {
-                                current_app
-                                    .state::<gateway_windows::GatewayWindows>()
-                                    .authorized_source("main", &url)
-                            });
+                            != expected_document
+                    {
+                        return;
+                    }
                     let mut navigation = state.inner.navigation.lock().expect("navigation");
-                    let monitor = current_dashboard
-                        .then(|| navigation.finish_settings_handoff())
-                        .flatten();
                     let snapshot = remote_generation.and_then(|generation| {
-                        navigation.record_remote_page_load(generation, loaded)
+                        navigation.record_remote_page_load(generation, false)
                     });
                     drop(navigation);
                     if let Some(snapshot) = snapshot {
                         state.update_tray(&snapshot);
-                    }
-                    if let Some(generation) = monitor {
-                        let cli = state.inner.cli.lock().expect("CLI mutex poisoned").clone();
-                        if let Some(cli) = cli {
-                            state.watch_local(current_app, cli, generation);
-                        }
                     }
                 };
                 // Wry can invoke this while the caller still holds navigation guards.
                 #[cfg(target_os = "linux")]
                 gtk::glib::idle_add_once(on_load);
                 #[cfg(not(target_os = "linux"))]
-                let _ = app.run_on_main_thread(on_load);
+                tauri::async_runtime::spawn(async move {
+                    let _ = app.run_on_main_thread(on_load);
+                });
             }
         })
         .auto_resize();
-    window
+    let view = window
         .add_child(builder, LogicalPosition::new(0, 0), size)
         .and_then(|view| {
             #[cfg(target_os = "macos")]
@@ -2911,7 +2966,51 @@ fn replace_main_webview_for_target(
             window_chrome::observe_history(&view);
             Ok(view)
         })
-        .map_err(|error| format!("Could not open the dashboard: {error}"))
+        .map_err(|error| format!("Could not open the dashboard: {error}"))?;
+    if let Some(registration) = startup_registration {
+        registration.start(view.clone(), move |view| {
+            dashboard_document_ready(view, readiness_token.as_deref(), remote_generation);
+        });
+    }
+    Ok(view)
+}
+
+fn dashboard_document_ready(
+    view: &Webview,
+    document_token: Option<&str>,
+    remote_generation: Option<u64>,
+) {
+    let app = view.app_handle();
+    let state = app.state::<DesktopState>();
+    if state.is_quitting()
+        || document_token.is_none()
+        || app
+            .state::<native_browser_bridge::NativeBrowserBridgeState>()
+            .document_token()
+            .as_deref()
+            != document_token
+        || !view.url().is_ok_and(|url| {
+            app.state::<gateway_windows::GatewayWindows>()
+                .authorized_source("main", &url)
+        })
+    {
+        return;
+    }
+    native_browser_bridge::page_load(view.clone(), false, document_token);
+    let mut navigation = state.inner.navigation.lock().expect("navigation");
+    let monitor = navigation.finish_settings_handoff();
+    let snapshot = remote_generation
+        .and_then(|generation| navigation.record_remote_page_load(generation, true));
+    drop(navigation);
+    if let Some(snapshot) = snapshot {
+        state.update_tray(&snapshot);
+    }
+    if let Some(generation) = monitor {
+        let cli = state.inner.cli.lock().expect("CLI mutex poisoned").clone();
+        if let Some(cli) = cli {
+            state.watch_local(app.clone(), cli, generation);
+        }
+    }
 }
 
 #[tauri::command]
@@ -3103,7 +3202,11 @@ fn main() {
                         webview.clone(),
                         matches!(payload.event(), PageLoadEvent::Started),
                     );
-                    native_browser_bridge::page_load(webview, payload, None);
+                    native_browser_bridge::page_load(
+                        webview,
+                        matches!(payload.event(), PageLoadEvent::Started),
+                        None,
+                    );
                 }
             })
             .on_new_window(move |url, _features| {

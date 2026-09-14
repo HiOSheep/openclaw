@@ -180,8 +180,12 @@ impl GatewayProfiles {
         let summary = saved.summary();
         next.profiles
             .retain(|profile| profile.id != saved.id && Some(profile.id.as_str()) != replacing);
-        if replacing.is_some() && next.selected.as_deref() == replacing {
-            next.selected = Some(saved.id.clone());
+        if replacing.is_some()
+            && replacing != Some(saved.id.as_str())
+            && next.selected.as_deref() == replacing
+        {
+            // The new endpoint becomes selected only after its window loads.
+            next.selected = None;
         }
         next.profiles.push(saved);
         self.commit(&mut cache, next)?;
@@ -474,6 +478,10 @@ mod tests {
         assert_eq!(renamed.id, saved.id);
         assert_ne!(profiles.get(&saved.id).unwrap().revision, revision);
         assert_eq!(
+            profiles.selected().unwrap().as_deref(),
+            Some(saved.id.as_str())
+        );
+        assert_eq!(
             profiles.get(&saved.id).unwrap().request.token.as_deref(),
             Some("original")
         );
@@ -487,6 +495,9 @@ mod tests {
         assert_ne!(moved.id, saved.id);
         assert!(profiles.get(&saved.id).is_err());
         assert!(profiles.get(&moved.id).unwrap().request.token.is_none());
+        assert!(profiles.selected().unwrap().is_none());
+        assert!(store(&vault).selected().unwrap().is_none());
+        profiles.remember(Some(&moved.id)).unwrap();
         assert_eq!(
             profiles.selected().unwrap().as_deref(),
             Some(moved.id.as_str())
@@ -499,6 +510,9 @@ mod tests {
             .unwrap();
         assert_ne!(tunneled.id, moved.id);
         assert!(profiles.get(&moved.id).is_err());
+        assert!(profiles.selected().unwrap().is_none());
+        assert!(store(&vault).selected().unwrap().is_none());
+        profiles.remember(Some(&tunneled.id)).unwrap();
         assert_eq!(
             profiles.selected().unwrap().as_deref(),
             Some(tunneled.id.as_str())
