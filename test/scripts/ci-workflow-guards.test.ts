@@ -18373,7 +18373,10 @@ describe("Linux App validation routing", () => {
               eventName,
               repository: "openclaw/openclaw",
               runAttempt: 1,
-              steps: { "inline-browser": { outputs: {}, outcome: "success" } },
+              steps: {
+                "inline-browser": { outputs: {}, outcome: "success" },
+                "gateway-switch": { outputs: {}, outcome: "success" },
+              },
             }),
         );
       const linux = selected(linuxSteps);
@@ -18396,6 +18399,7 @@ describe("Linux App validation routing", () => {
       ).toContain("-s apps/linux/tests -p 'test_packaged_runtime_smoke.py'");
       expect(linux.map((step) => step.run)).toContain("cargo +stable build --locked");
       expect(linux.find((step) => step.id === "inline-browser")?.run).toContain("--inline-browser");
+      expect(linux.find((step) => step.id === "gateway-switch")?.run).toContain("--gateway-switch");
       for (const name of packagingSteps) {
         expect(
           linuxSteps.some((step) => step.name === name),
@@ -18411,7 +18415,7 @@ describe("Linux App validation routing", () => {
           linux
             .filter((step) => step.uses?.startsWith("actions/upload-artifact@"))
             .map((step) => step.with?.name),
-        ).toEqual(["linux-inline-browser"]);
+        ).toEqual(["linux-inline-browser", "linux-gateway-switch"]);
       }
     },
   );
@@ -18419,20 +18423,26 @@ describe("Linux App validation routing", () => {
   it.each(["success", "failure", "cancelled", "skipped"] as const)(
     "uploads native browser proof after an attempted run: %s",
     (outcome) => {
-      const upload = expectDefined(
-        linuxSteps.find((step) => step.name === "Upload native inline browser proof"),
-        "native browser proof upload",
-      );
-      expect(
-        evaluateWorkflowExpression(`\${{ ${upload.if} }}`, {
-          eventName: "pull_request",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          failed: outcome === "failure",
-          cancelled: outcome === "cancelled",
-          steps: { "inline-browser": { outputs: {}, outcome } },
-        }),
-      ).toBe(outcome !== "skipped");
+      for (const [name, id] of [
+        ["Upload native inline browser proof", "inline-browser"],
+        ["Upload native Gateway switching proof", "gateway-switch"],
+      ] as const) {
+        const upload = expectDefined(
+          linuxSteps.find((step) => step.name === name),
+          `${id} proof upload`,
+        );
+        expect(
+          evaluateWorkflowExpression(`\${{ ${upload.if} }}`, {
+            eventName: "pull_request",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            failed: outcome === "failure",
+            cancelled: outcome === "cancelled",
+            steps: { [id]: { outputs: {}, outcome } },
+          }),
+          name,
+        ).toBe(outcome !== "skipped");
+      }
     },
   );
 
