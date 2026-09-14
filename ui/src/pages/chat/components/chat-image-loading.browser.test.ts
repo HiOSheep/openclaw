@@ -113,6 +113,8 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(before.height).toBeCloseTo(scenario.expectedHeight, 1);
       expect(getComputedStyle(originalFrame).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
       expect(originalFrame.getAttribute("aria-busy")).toBe("true");
+      expect(originalFrame.textContent?.trim()).toBe("");
+      expect(originalFrame.querySelector("svg")).toBeNull();
       expect(container.querySelector(".chat-assistant-attachment-card")).toBeNull();
       response.resolve(svgResponse(scenario.width ?? 800, scenario.height ?? 1600));
       await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
@@ -123,6 +125,12 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       expect(frame(container)).toBe(originalFrame);
       draw();
       expect(container.querySelector("img")).toBe(image);
+      expect(geometry(container)).toEqual(before);
+      render(nothing, container);
+      draw();
+      const remounted = container.querySelector("img")!;
+      expect(remounted.getAttribute("src")).toBe(image.getAttribute("src"));
+      await remounted.decode();
       expect(geometry(container)).toEqual(before);
       expect(fetchMock).toHaveBeenCalledOnce();
     },
@@ -182,7 +190,13 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       );
       await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
       expect(geometry(container)).toEqual(before);
+      const sourceUrl = container.querySelector("img")!.getAttribute("src");
       expect(container.querySelector("img")!.getAttribute("width")).toBe("1200");
+      render(nothing, container);
+      draw();
+      expect(container.querySelector("img")?.getAttribute("src")).toBe(sourceUrl);
+      expect(geometry(container)).toEqual(before);
+      expect(fetch).toHaveBeenCalledOnce();
     },
   );
 

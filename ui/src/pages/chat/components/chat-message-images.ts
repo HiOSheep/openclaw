@@ -275,7 +275,11 @@ class MessageImageResourceDirective extends AsyncDirective {
     );
   }
 
-  private renderImageFrame(img: ImageBlock, content: TemplateResult, loading = false) {
+  private renderImageFrame(
+    img: ImageBlock,
+    content: TemplateResult | typeof nothing,
+    loading = false,
+  ) {
     const sized =
       Number.isFinite(img.width) &&
       img.width! > 0 &&
@@ -294,17 +298,22 @@ class MessageImageResourceDirective extends AsyncDirective {
       class="chat-image-frame chat-image-frame--image ${this.managed ? "chat-image-frame--managed" : ""}"
       style=${`--chat-image-width: ${width}px; --chat-image-ratio: ${width} / ${height}`}
       aria-busy=${loading ? "true" : "false"}
+      role=${loading ? "status" : nothing}
+      aria-label=${loading ? t("common.loading") : nothing}
       >${content}</span
     >`;
   }
 
   private renderImagePlaceholder(image: ImageBlock, reason?: string) {
+    if (reason === undefined) {
+      return this.renderImageFrame(image, nothing, true);
+    }
     return this.renderImageFrame(
       image,
       html`<span class="chat-image-status" role="status">
-        ${icons.image}<span>${reason ?? t("common.loading")}</span>
+        <span>${reason}</span>
         ${
-          reason && this.managed
+          this.managed
             ? html`<button
                 type="button"
                 class="btn btn--sm"
@@ -326,7 +335,6 @@ class MessageImageResourceDirective extends AsyncDirective {
             : nothing
         }
       </span>`,
-      reason === undefined,
     );
   }
 

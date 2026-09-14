@@ -328,7 +328,7 @@
   flex: none;
   width: min(100%, var(--chat-image-width));
   aspect-ratio: var(--chat-image-ratio);
-  background: var(--bg-muted);
+  background: color-mix(in srgb, var(--bg-muted) 45%, var(--bg));
 }
 
 .chat-image-frame--image > .chat-message-image-button {
@@ -363,12 +363,6 @@
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   text-align: center;
-
-  svg {
-    width: 24px;
-    height: 24px;
-    flex: none;
-  }
 }
 
 .chat-image-frame--managed::after {
