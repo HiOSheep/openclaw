@@ -18,6 +18,9 @@ struct CloudflareAccessClient: Sendable {
             throw CloudflareAccessError.invalidGateway
         }
         components.scheme = "https"
+        if components.path.isEmpty {
+            components.path = "/"
+        }
         guard let url = components.url else { throw CloudflareAccessError.invalidGateway }
         var probe = URLRequest(url: url)
         probe.setValue(session?.authorizationHeader(for: url), forHTTPHeaderField: "Cf-Access-Token")
