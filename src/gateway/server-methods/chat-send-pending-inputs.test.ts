@@ -562,9 +562,13 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it.each(["consumed", "changed-payload", "interrupted"] as const)(
-    "preserves legacy collected-input replay without adopting old custody (%s)",
-    async (disposition) => {
+  it.each(
+    ["consumed", "changed-payload", "interrupted"].flatMap((disposition) =>
+      [false, true].map((recordedClient) => ({ disposition, recordedClient })),
+    ),
+  )(
+    "preserves legacy collected-input replay without adopting old custody ($disposition, recordedClient=$recordedClient)",
+    async ({ disposition, recordedClient }) => {
       const fixture = await createBrowserFollowupFixture({ preserveContent: true });
       const profile = ensureProfileForEmail("legacy-input@example.test");
       fixture.client.authenticatedUserProfile = {
@@ -588,26 +592,6 @@ describe("ordinary chat input admission", () => {
         if (!message) {
           throw new Error("Expected the approved original source before collection");
         }
-        const { timestamp: _timestamp, ...stableMessage } = message;
-        // This is the exact pre-upgrade stored format. Keep the real accepted
-        // source and collector, changing only the historical request hash.
-        const legacyHash = createHash("sha256")
-          .update(stableStringify(stableMessage))
-          .digest("hex");
-        const database = openOpenClawAgentDatabase(
-          toDatabaseOptions(resolveSqliteScope(fixture.scope)),
-        );
-        const seeded = database.db
-          .prepare(
-            "UPDATE session_pending_inputs SET request_hash = ? WHERE session_key = ? AND session_id = ? AND run_id = ?",
-          )
-          .run(
-            legacyHash,
-            fixture.scope.sessionKey,
-            fixture.scope.sessionId,
-            fixture.params.idempotencyKey,
-          );
-        expect(seeded.changes).toBe(1);
         if (disposition !== "interrupted") {
           const aggregate = createUserTurnTranscriptRecorder({
             input: {
@@ -627,6 +611,31 @@ describe("ordinary chat input admission", () => {
         rotateAgentEventLifecycleGeneration();
         await fixture.finishDispatch();
         await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
+        const legacyMessage = structuredClone(message);
+        if (!recordedClient) {
+          // Shipped Gateway receipts predate transport.clients. Seed only after
+          // collection, whose live owner still requires its exact accepted bytes.
+          delete legacyMessage["__openclaw"]?.transport;
+        }
+        const { timestamp: _timestamp, ...stableMessage } = legacyMessage;
+        const legacyHash = createHash("sha256")
+          .update(stableStringify(stableMessage))
+          .digest("hex");
+        const database = openOpenClawAgentDatabase(
+          toDatabaseOptions(resolveSqliteScope(fixture.scope)),
+        );
+        const seeded = database.db
+          .prepare(
+            "UPDATE session_pending_inputs SET request_hash = ?, message_json = ? WHERE session_key = ? AND session_id = ? AND run_id = ?",
+          )
+          .run(
+            legacyHash,
+            JSON.stringify(legacyMessage),
+            fixture.scope.sessionKey,
+            fixture.scope.sessionId,
+            fixture.params.idempotencyKey,
+          );
+        expect(seeded.changes).toBe(1);
         const transcript = loadTranscriptEventsSync(fixture.scope);
         fixture.context.dedupe.clear();
         dispatchInboundMessageMock.mockClear();

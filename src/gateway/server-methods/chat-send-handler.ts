@@ -127,11 +127,8 @@ async function handleChatSendWithOptions(
   if (!preparedAttachments.ok) {
     return;
   }
-  // Prepared inbound media has no transcript reference until the user turn
-  // persists; every pre-ACK abandonment exit funnels through
-  // cleanupAdmittedRun, which fires this armed discard. The hasPersisted gate
-  // protects the restart-safe path, which persists durably before its abort
-  // and routing exits; dispatch owns persistence after the ACK disarms this.
+  // Discard abandoned preparation only until a transcript or pending input owns
+  // its media. Dispatch owns persistence after the ACK disarms this cleanup.
   let preparedMediaRecorder: UserTurnTranscriptRecorder | undefined;
   admitted.value.setDiscardAbandonedPreparedMedia(() => {
     if (
