@@ -426,6 +426,7 @@
   stroke-linejoin: round;
 }
 
+.chat-send-status[data-send-state="queued"],
 .chat-send-status[data-send-state="unconfirmed"],
 .chat-send-status[data-send-state="waiting-reconnect"] {
   color: var(--warn);

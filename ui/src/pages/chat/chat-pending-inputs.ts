@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
   CHAT_INPUT_RUN_ID_MAX_CHARS,
@@ -40,6 +41,20 @@ type PendingInputView = {
 };
 const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
+function markQueuedPendingInput(message: unknown, id: string): unknown {
+  const record = asOptionalRecord(message);
+  if (!record) {
+    return message;
+  }
+  return {
+    ...record,
+    __openclaw: {
+      ...asOptionalRecord(record["__openclaw"]),
+      pendingInput: { id, state: "queued" },
+    },
+  };
+}
+
 export function buildPendingInputItems(
   inputs: ChatPendingInputsPage["items"],
   searchQuery?: string,
@@ -56,15 +71,25 @@ export function buildPendingInputItems(
     if (searchQuery?.trim() && !messageMatchesSearchQuery(input.message, searchQuery)) {
       continue;
     }
+    const hasSpecificQueuedState =
+      input.state === "queued" &&
+      Boolean(
+        input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId)),
+      );
     // Custody keeps submission correlation outside the message; use it for
     // presentation without inventing transcript or execution identity.
     items.push(
-      ...buildMessageItems([input.message], () =>
-        input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
+      ...buildMessageItems(
+        [
+          input.state === "queued" && !hasSpecificQueuedState
+            ? markQueuedPendingInput(input.message, input.id)
+            : input.message,
+        ],
+        () => (input.runId ? `send:${input.runId}` : `pending-input:${input.id}`),
       ),
     );
     if (input.state === "queued") {
-      if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
+      if (hasSpecificQueuedState) {
         items.push({
           kind: "notice",
           key: `pending-input:${input.id}:state`,

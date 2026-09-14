@@ -204,6 +204,12 @@ suite.define(() => {
           await gateway.waitForRequest("chat.history", { after: histories });
           // Custody starts the canonical media read while the send acknowledgment is held.
           await expect.poll(() => metadataRequested).toBe(true);
+          const pendingStatus = page.locator(
+            '.chat-group.user .chat-send-status[data-send-state="queued"]',
+          );
+          await expect
+            .poll(() => pendingStatus.textContent())
+            .toContain("Queued — the agent has not received this message yet");
           await expectImageStillVisible("02-custody");
           await gateway.resolveDeferred("chat.send", { runId, status: "started" });
           await waitForCommittedState(
@@ -260,6 +266,7 @@ suite.define(() => {
             message: canonical,
           });
           await page.locator('.chat-bubble[data-entry-id="accepted-image-input"]').waitFor();
+          await expect.poll(() => pendingStatus.count()).toBe(0);
           if (order === "event-first") {
             await gateway.resolveDeferred("chat.history", canonicalHistory);
           }

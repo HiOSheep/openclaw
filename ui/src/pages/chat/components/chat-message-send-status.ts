@@ -18,7 +18,9 @@ export function renderChatSendStatus(
   const action =
     actions.queuedMessageAction?.id === status.id ? actions.queuedMessageAction : undefined;
   const reconnecting = status.state === "waiting-reconnect";
-  const retry = reconnecting ? undefined : (action?.onAction ?? actions.onRetryQueuedMessage);
+  const awaitingAgent = status.state === "queued";
+  const retry =
+    reconnecting || awaitingAgent ? undefined : (action?.onAction ?? actions.onRetryQueuedMessage);
   const discard =
     (status.state === "unconfirmed" || reconnecting) && !action
       ? actions.onDiscardQueuedMessage
@@ -33,9 +35,11 @@ export function renderChatSendStatus(
       >${t(
         reconnecting
           ? "chat.queue.states.waitingForReconnect"
-          : status.state === "unconfirmed"
-            ? "chat.queue.deliveryUnconfirmed"
-            : "chat.queue.notSent",
+          : awaitingAgent
+            ? "chat.pendingInputs.queued"
+            : status.state === "unconfirmed"
+              ? "chat.queue.deliveryUnconfirmed"
+              : "chat.queue.notSent",
       )}</span
     >
     ${

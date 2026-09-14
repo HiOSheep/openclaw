@@ -1099,13 +1099,34 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { state: "failed", label: "Not sent", actionLabel: undefined },
-    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: undefined },
-    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: "Check delivery" },
-    { state: "waiting-reconnect", label: "Waiting for reconnect", actionLabel: undefined },
+    {
+      kind: undefined,
+      state: "queued",
+      label: "Queued — the agent has not received this message yet",
+      actionLabel: undefined,
+    },
+    { kind: "pending-send", state: "failed", label: "Not sent", actionLabel: undefined },
+    {
+      kind: "pending-send",
+      state: "unconfirmed",
+      label: "Delivery unconfirmed",
+      actionLabel: undefined,
+    },
+    {
+      kind: "pending-send",
+      state: "unconfirmed",
+      label: "Delivery unconfirmed",
+      actionLabel: "Check delivery",
+    },
+    {
+      kind: "pending-send",
+      state: "waiting-reconnect",
+      label: "Waiting for reconnect",
+      actionLabel: undefined,
+    },
   ] as const)(
     "shows a $state footer with its diagnostic and recovery actions ($actionLabel)",
-    ({ state, label, actionLabel }) => {
+    ({ kind, state, label, actionLabel }) => {
       const container = document.createElement("div");
       const onRetryQueuedMessage = vi.fn();
       const onDiscardQueuedMessage = vi.fn();
@@ -1114,8 +1135,9 @@ describe("grouped chat rendering", () => {
         createUserMessage("Attempted message", {
           __openclaw: {
             id: "attempted-send",
-            kind: "pending-send",
-            state,
+            ...(kind
+              ? { kind, state }
+              : { pendingInput: { id: "attempted-send", state: "queued" } }),
             error: "Delivery diagnostic",
           },
         }),
@@ -1131,18 +1153,19 @@ describe("grouped chat rendering", () => {
 
       const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
       expect(status.dataset.sendState).toBe(state);
-      expect(status.title).toBe("Delivery diagnostic");
       const reconnecting = state === "waiting-reconnect";
+      const awaitingAgent = state === "queued";
+      expect(status.title).toBe(awaitingAgent ? "" : "Delivery diagnostic");
       const canDiscard = (state === "unconfirmed" || reconnecting) && !actionLabel;
       expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(
-        `· ${label}${reconnecting ? "" : ` · ${actionLabel ?? "Retry"}`}${canDiscard ? " · Discard" : ""}`,
+        `· ${label}${reconnecting || awaitingAgent ? "" : ` · ${actionLabel ?? "Retry"}`}${canDiscard ? " · Discard" : ""}`,
       );
       const retry = status.querySelector<HTMLButtonElement>(".chat-send-status__retry");
       expect(retry?.getAttribute("aria-label")).toBe(
-        reconnecting ? undefined : (actionLabel ?? "Retry queued message"),
+        reconnecting || awaitingAgent ? undefined : (actionLabel ?? "Retry queued message"),
       );
       retry?.click();
-      if (reconnecting) {
+      if (reconnecting || awaitingAgent) {
         expect(onRetryQueuedMessage).not.toHaveBeenCalled();
       } else {
         expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
@@ -1156,7 +1179,7 @@ describe("grouped chat rendering", () => {
         expect(onDiscardQueuedMessage).toHaveBeenCalledWith("attempted-send");
         discard?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
         expect(onDiscardQueuedMessage).toHaveBeenCalledTimes(1);
-        expect(onRetryQueuedMessage).toHaveBeenCalledTimes(reconnecting ? 0 : 1);
+        expect(onRetryQueuedMessage).toHaveBeenCalledTimes(reconnecting || awaitingAgent ? 0 : 1);
       } else {
         expect(discard).toBeNull();
       }
