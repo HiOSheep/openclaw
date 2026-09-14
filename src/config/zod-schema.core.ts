@@ -1,6 +1,7 @@
 // Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import "zod/compile";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import type { OpenRouterRouting, VercelGatewayRouting } from "../llm/types.js";

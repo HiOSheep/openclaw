@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { truncateGraphemes } from "../../text.js";
 import type {

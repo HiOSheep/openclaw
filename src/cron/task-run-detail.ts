@@ -1,6 +1,7 @@
 /** Read-side cron codec between task-ledger detail and the stable run-history wire shape.
  * Deliberately free of agent/runtime imports so history reads stay dependency-light;
  * the event->entry write codec lives in task-run-event-codec.ts. */
+import "zod/compile";
 import {
   asSafeIntegerInRange,
   MAX_DATE_TIMESTAMP_MS,

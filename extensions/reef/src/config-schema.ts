@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
 import type { ReefAutonomy } from "./friend-types.js";

@@ -1,4 +1,5 @@
 // Tlon helper module supports config schema behavior.
+import "zod/compile";
 import {
   ChannelImplicitMentionsSchema,
   buildChannelConfigSchema,

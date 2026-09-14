@@ -1,4 +1,5 @@
 // Defines Google Chat provider schema fragments.
+import "zod/compile";
 import { z } from "zod";
 import {
   ChannelBotLoopProtectionSchema,

@@ -2,6 +2,7 @@
  * ACPX plugin configuration schema and public config types. Runtime setup uses
  * this file as the single source of truth for validation and defaulting.
  */
+import "zod/compile";
 import { z } from "zod";
 import type { AcpxAgentCommand } from "./command-line.js";
 

@@ -1,4 +1,5 @@
 // Doctor-only import for the retired exec approvals JSON store.
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";

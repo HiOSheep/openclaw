@@ -1,4 +1,5 @@
 // Compares CLI startup benchmark reports against checked-in budgets.
+import "zod/compile";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

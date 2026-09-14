@@ -1,4 +1,5 @@
 // Tailscale status helpers parse and validate status payloads from Tailscale.
+import "zod/compile";
 import { z } from "zod";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 

@@ -6,6 +6,7 @@
  * bundled channel schemas. Internal callers use this subpath only for the
  * bundled provider schemas; generic primitives come from channel-config-schema.
  */
+import "zod/compile";
 import { z, type ZodObject, type ZodOptional, type ZodType } from "zod";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { z } from "zod";
 import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";

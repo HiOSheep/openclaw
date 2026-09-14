@@ -1,5 +1,6 @@
 // OpenAI-compatible embeddings HTTP endpoint.
 // Bridges /v1/embeddings requests to configured OpenClaw memory providers.
+import "zod/compile";
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {

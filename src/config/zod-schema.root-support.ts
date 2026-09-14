@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import "zod/compile";
 import { z } from "zod";
 import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
 import { McpServerSchema } from "./zod-schema.mcp-server.js";

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import type { DiscordMessage, DiscordSource, SourceRuntime, SourceStatus } from "../../types.js";
 import { checkAbort, createResponseParser } from "../http.js";

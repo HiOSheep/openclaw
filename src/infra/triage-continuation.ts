@@ -1,3 +1,4 @@
+import "zod/compile";
 import { spawn } from "node:child_process";
 // Private live continuations across the installed CLI, never serialized execution authority.
 import { randomUUID } from "node:crypto";

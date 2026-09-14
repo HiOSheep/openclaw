@@ -1,4 +1,5 @@
 // Shared Zod leaves for bundled channel messaging configuration.
+import "zod/compile";
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { NativeExecApprovalEnableModeSchema } from "./zod-schema.approvals.js";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";

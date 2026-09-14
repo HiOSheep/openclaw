@@ -1,4 +1,5 @@
 /** Manifest and restore helpers for doctor-owned session SQLite migrations. */
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

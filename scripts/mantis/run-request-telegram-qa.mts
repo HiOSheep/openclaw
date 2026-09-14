@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // One trusted catalog recipe, not candidate-supplied QA code or a live service.
+import "zod/compile";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";

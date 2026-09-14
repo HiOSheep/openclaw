@@ -1,3 +1,4 @@
+import "zod/compile";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { z } from "zod";

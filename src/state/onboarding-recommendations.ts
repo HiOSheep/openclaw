@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import { sha256Hex } from "../infra/crypto-digest.js";

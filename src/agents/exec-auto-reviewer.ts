@@ -4,6 +4,7 @@
  * This wraps a small reviewer prompt around pending exec requests and converts
  * the model response into allow-once, deny, or ask decisions.
  */
+import "zod/compile";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { resolvePositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";

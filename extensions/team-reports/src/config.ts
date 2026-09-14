@@ -1,3 +1,4 @@
+import "zod/compile";
 import { open } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";

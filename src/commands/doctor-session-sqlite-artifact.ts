@@ -1,4 +1,5 @@
 /** Exact original identity and no-copy publication for migration recovery artifacts. */
+import "zod/compile";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

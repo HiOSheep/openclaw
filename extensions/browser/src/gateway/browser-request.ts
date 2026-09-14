@@ -2,6 +2,7 @@
  * Gateway handler for browser.request, including optional node-host proxy
  * dispatch and local Browser control route dispatch.
  */
+import "zod/compile";
 import crypto from "node:crypto";
 import { clampTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";

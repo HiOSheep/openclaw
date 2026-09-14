@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 
 /** Visit schema wrappers and their fields in config path order, preserving array/wildcard paths. */

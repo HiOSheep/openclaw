@@ -7,6 +7,7 @@
  * @see https://www.open-responses.com/
  */
 
+import "zod/compile";
 import { z } from "zod";
 
 // ─────────────────────────────────────────────────────────────────────────────

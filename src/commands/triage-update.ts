@@ -1,4 +1,5 @@
 // Preserve one failed update as bounded diagnostics across the updater's fresh CLI handoff.
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

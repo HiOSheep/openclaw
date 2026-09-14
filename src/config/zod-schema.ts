@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { createHash, randomUUID } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";

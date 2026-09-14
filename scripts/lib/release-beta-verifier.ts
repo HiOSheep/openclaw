@@ -1,3 +1,4 @@
+import "zod/compile";
 import { execFileSync } from "node:child_process";
 // Release Beta Verifier script supports OpenClaw repository automation.
 import { createHash, randomUUID } from "node:crypto";

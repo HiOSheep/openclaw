@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { updateFailureSchema, type TriageUpdateFailure } from "../commands/triage-update.js";
 

@@ -1,4 +1,5 @@
 // Defines cloud-worker provider profile config parsing.
+import "zod/compile";
 import { z } from "zod";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";

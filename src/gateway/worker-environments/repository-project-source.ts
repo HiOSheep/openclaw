@@ -1,3 +1,4 @@
+import "zod/compile";
 import { normalizeAgentIdStrict } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";

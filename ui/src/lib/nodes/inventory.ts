@@ -1,3 +1,4 @@
+import "zod/compile";
 import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/number-coercion";
 // Builds the unified node/device inventory shown on the Devices page.
 // The gateway exposes two overlapping views of the same machines: paired device

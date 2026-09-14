@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { GitHubIdentityError, prepareGitHubReadIdentity } from "../agents/github-tool-identity.js";
 import { BoardValidationError } from "../boards/board-layout.js";

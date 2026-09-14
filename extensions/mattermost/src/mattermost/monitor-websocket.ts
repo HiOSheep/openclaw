@@ -1,4 +1,5 @@
 // Mattermost plugin module implements monitor websocket behavior.
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";

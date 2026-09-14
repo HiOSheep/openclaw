@@ -1,6 +1,7 @@
 /**
  * Installs runtime-context and prompt-transform boundaries before LLM calls.
  */
+import "zod/compile";
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";

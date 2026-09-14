@@ -1,3 +1,4 @@
+import "zod/compile";
 import { readFileSync, statSync } from "node:fs";
 import { win32 } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

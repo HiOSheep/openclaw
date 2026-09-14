@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { MANAGED_GITHUB_PROFILE_ID_PATTERN } from "../config/github-identity-profile-id.js";
 

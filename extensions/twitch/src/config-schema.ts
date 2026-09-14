@@ -1,4 +1,5 @@
 // Twitch helper module supports config schema behavior.
+import "zod/compile";
 import { MarkdownConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "zod";
 

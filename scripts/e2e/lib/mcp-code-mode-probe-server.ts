@@ -8,11 +8,13 @@ const require = createRequire(import.meta.url);
 export async function writeProbeMcpServer(serverPath: string) {
   const sdkMcpServerPath = require.resolve("@modelcontextprotocol/sdk/server/mcp.js");
   const sdkStdioServerPath = require.resolve("@modelcontextprotocol/sdk/server/stdio.js");
+  const zodCompilePath = require.resolve("zod/compile");
   const zodPath = require.resolve("zod");
   await fs.mkdir(path.dirname(serverPath), { recursive: true });
   await fs.writeFile(
     serverPath,
     `#!/usr/bin/env node
+import ${JSON.stringify(zodCompilePath)};
 import { McpServer } from ${JSON.stringify(sdkMcpServerPath)};
 import { StdioServerTransport } from ${JSON.stringify(sdkStdioServerPath)};
 import { z } from ${JSON.stringify(zodPath)};

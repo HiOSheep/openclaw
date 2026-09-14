@@ -1,4 +1,4 @@
-// Guards config schema startup imports against loading heavy runtime modules.
+// Guards lazy schema compilation and startup imports against loading heavy runtime modules.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -13,13 +13,19 @@ describe("OpenClawSchema startup imports", () => {
     });
   });
 
-  it("does not load provider-specific channel schemas for generic channel validation", async () => {
+  it("compiles generic channel validation lazily without loading provider-specific schemas", async () => {
     const runtime = await importFreshModule<typeof import("./zod-schema.js")>(
       import.meta.url,
       "./zod-schema.js?scope=startup-generic-channels",
     );
 
-    const parsed = runtime.OpenClawSchema.safeParse({
+    const schema = runtime.OpenClawSchema;
+    const { _zod: schemaInternals } = schema;
+    // Zod's pinned native compiler records its validator after the first synchronous parse.
+    expect(schemaInternals.bag.validator).toBeUndefined();
+
+    const config = {
+      worktreeRoot: "  ~/worktrees  ",
       channels: {
         defaults: {
           groupPolicy: "open",
@@ -31,9 +37,32 @@ describe("OpenClawSchema startup imports", () => {
         },
         discord: {},
       },
+    };
+
+    const parsed = schema.safeParse(config);
+    expect(parsed).toMatchObject({
+      success: true,
+      data: { worktreeRoot: "~/worktrees", channels: config.channels },
     });
 
-    expect(parsed.success).toBe(true);
+    const validator = schemaInternals.bag.validator;
+    expect(validator).toBeTypeOf("function");
+    expect(schema.safeParse(config)).toEqual(parsed);
+    expect(schemaInternals.bag.validator).toBe(validator);
+
+    expect(schema.safeParse({ talk: { agentId: "missing" } })).toMatchObject({
+      success: false,
+      error: {
+        issues: [
+          {
+            code: "custom",
+            path: ["talk", "agentId"],
+            message: 'Unknown agent id "missing" (not in agents.entries).',
+          },
+        ],
+      },
+    });
+
     expect(providersWhatsappImportMock).not.toHaveBeenCalled();
   });
 });

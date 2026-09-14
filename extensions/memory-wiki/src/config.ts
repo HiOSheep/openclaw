@@ -1,3 +1,4 @@
+import "zod/compile";
 import os from "node:os";
 import path from "node:path";
 // agent-scope-runtime exports the same resolvers without memory-host-core's

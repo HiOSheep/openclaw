@@ -1,3 +1,4 @@
+import "zod/compile";
 import { createHmac } from "node:crypto";
 import { z } from "zod";
 import type { TelegramProofPlan } from "./telegram-proof-plan.ts";

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";

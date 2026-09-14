@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
+import "zod/compile";
 import { z } from "zod";
 import { resolveCodexAppServerAuthProfileStore } from "./app-server/auth-profile.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";

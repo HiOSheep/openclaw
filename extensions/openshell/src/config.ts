@@ -1,4 +1,5 @@
 // Openshell helper module supports config behavior.
+import "zod/compile";
 import path from "node:path";
 import { buildPluginConfigSchema, type OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import {

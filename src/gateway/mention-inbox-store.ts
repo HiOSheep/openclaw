@@ -1,3 +1,4 @@
+import "zod/compile";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { MAX_HUMAN_MENTIONS } from "../../packages/gateway-protocol/src/index.js";

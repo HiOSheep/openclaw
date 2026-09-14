@@ -1,3 +1,4 @@
+import "zod/compile";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
 import {

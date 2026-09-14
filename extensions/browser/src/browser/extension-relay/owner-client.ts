@@ -1,3 +1,4 @@
+import "zod/compile";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { ConnectOverCDPTransport } from "playwright-core";

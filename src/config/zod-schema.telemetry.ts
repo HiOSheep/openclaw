@@ -1,4 +1,5 @@
 // Defines anonymous feature-usage consent and its generated field metadata.
+import "zod/compile";
 import { z } from "zod";
 import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import type { TelemetryConfig } from "./types.telemetry.js";

@@ -1,4 +1,5 @@
 // QA Lab Slack live domain contracts and wire schemas.
+import "zod/compile";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";

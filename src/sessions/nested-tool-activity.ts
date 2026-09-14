@@ -1,3 +1,4 @@
+import "zod/compile";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";

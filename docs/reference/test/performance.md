@@ -27,6 +27,30 @@ pnpm test:perf:profile:runner -- --output-dir .artifacts/profiles -- --config te
 
 Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
 
+### Zod schema compilation
+
+Modules that construct runtime Zod schemas import `zod/compile` before schema
+construction. Keep activation with direct consumers so standalone workers,
+plugins, and scripts receive it without depending on Gateway startup:
+
+```ts
+import "zod/compile";
+import { z } from "zod";
+
+const messageSchema = z.object({ text: z.string() });
+```
+
+Zod generates a parser lazily on the first synchronous parse and reuses it for
+later calls. Existing `parse` and `safeParse` calls retain their parsed data and
+Zod errors. Async parsing, recursive schemas, and unsupported features use the
+runtime parser. Compilation respects the Control UI's `jitless` setting, which
+keeps its strict Content Security Policy intact.
+
+Keep refinement and transform callbacks pure: an invalid compiled parse can
+fall back to the runtime parser and execute those callbacks twice. Benchmark
+the cold first parse, including compilation, separately from warm repeated
+parses, and include both valid and invalid inputs.
+
 ## Benchmarks
 
 <Accordion title="Session history (scripts/bench-session-history.ts)">

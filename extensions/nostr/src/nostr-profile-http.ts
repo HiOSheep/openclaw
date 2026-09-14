@@ -7,6 +7,7 @@
  * - GET /api/channels/nostr/:accountId/profile - Get current profile state
  */
 
+import "zod/compile";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";

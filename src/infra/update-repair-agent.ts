@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { renderTriagePrompt } from "../commands/triage-prompt.js";

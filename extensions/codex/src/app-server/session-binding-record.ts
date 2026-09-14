@@ -5,6 +5,7 @@ import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harne
 import { resolveSessionAgentIdsStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import "zod/compile";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.js";
 import { normalizeCodexServiceTier } from "./config-utils.js";

@@ -1,4 +1,5 @@
 // QA Lab scenario module references normalize into the canonical flow shape.
+import "zod/compile";
 import { z } from "zod";
 
 const qaFlowModuleExportArgSchema = z

@@ -1,3 +1,4 @@
+import "zod/compile";
 import { normalizeLegacyDmAliases } from "openclaw/plugin-sdk/channel-config-helpers";
 // Discord helper module supports config schema behavior.
 import {

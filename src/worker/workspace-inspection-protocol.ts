@@ -1,3 +1,4 @@
+import "zod/compile";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import { z } from "zod";

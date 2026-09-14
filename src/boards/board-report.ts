@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import { BOARD_WIDGET_PROPS_MAX_BYTES, BoardValidationError } from "./board-layout.js";
 

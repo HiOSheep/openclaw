@@ -1,5 +1,6 @@
 // Defines gateway-host desktop config parsing and generated field metadata.
 import path from "node:path";
+import "zod/compile";
 import { z } from "zod";
 import { type ConfigSchemaShape, projectConfigFieldMetadata } from "./schema.field-metadata.js";
 import type { DesktopConfig } from "./types.desktop.js";

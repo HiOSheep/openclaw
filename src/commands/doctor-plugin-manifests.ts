@@ -1,4 +1,5 @@
 /** Doctor migration for legacy plugin manifest capability keys into contracts.* fields. */
+import "zod/compile";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";

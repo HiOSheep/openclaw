@@ -1,4 +1,5 @@
 /** Doctor-only inspection and migration for legacy sandbox registry files. */
+import "zod/compile";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";

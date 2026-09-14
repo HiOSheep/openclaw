@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import "zod/compile";
 import { z } from "zod";
 
 export const CODEX_MANAGED_THREAD_NAMESPACE = "app-server-managed-threads";

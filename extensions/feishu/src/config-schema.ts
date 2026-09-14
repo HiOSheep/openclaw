@@ -1,4 +1,5 @@
 // Feishu helper module supports config schema behavior.
+import "zod/compile";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   ContextVisibilityModeSchema,

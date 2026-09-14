@@ -1,4 +1,5 @@
 // Raft channel configuration schema.
+import "zod/compile";
 import {
   buildChannelConfigSchema,
   buildMultiAccountChannelSchema,

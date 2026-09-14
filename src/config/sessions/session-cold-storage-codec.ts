@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import "zod/compile";
 import { z } from "zod";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 

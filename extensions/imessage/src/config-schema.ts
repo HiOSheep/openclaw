@@ -1,4 +1,5 @@
 // iMessage helper module supports config schema behavior.
+import "zod/compile";
 import {
   buildChannelConfigSchema,
   buildChannelReactionShape,

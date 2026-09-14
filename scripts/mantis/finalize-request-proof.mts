@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Fresh trusted job only; never import or execute anything from the evidence ZIP.
+import "zod/compile";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";

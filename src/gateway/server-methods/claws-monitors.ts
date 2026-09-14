@@ -1,3 +1,4 @@
+import "zod/compile";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";

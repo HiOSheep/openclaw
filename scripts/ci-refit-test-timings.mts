@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+import "zod/compile";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setTimeout } from "node:timers/promises";

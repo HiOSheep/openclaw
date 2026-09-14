@@ -2,6 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import "zod/compile";
 import { z } from "zod";
 import { terminateCodexAppServerOrphan } from "./transport-process-containment.js";
 import {

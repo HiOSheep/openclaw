@@ -1,3 +1,4 @@
+import "zod/compile";
 import os from "node:os";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { z } from "zod";

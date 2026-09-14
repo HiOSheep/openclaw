@@ -1,5 +1,6 @@
 // Gateway OpenAI-compatible chat completions endpoint.
 // Translates OpenAI chat requests to OpenClaw agent runs and SSE/JSON responses.
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";

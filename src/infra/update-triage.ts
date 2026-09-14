@@ -1,3 +1,4 @@
+import "zod/compile";
 import fs from "node:fs/promises";
 import { z } from "zod";
 import { formatInstallationTargetCommand } from "../cli/installation-target-format.js";

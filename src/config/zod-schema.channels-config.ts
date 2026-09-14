@@ -1,4 +1,5 @@
 // Defines Zod schema fragments for channel configuration.
+import "zod/compile";
 import { z } from "zod";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";

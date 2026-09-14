@@ -1,4 +1,5 @@
 // Mattermost plugin module implements client behavior.
+import "zod/compile";
 import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";

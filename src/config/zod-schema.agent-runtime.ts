@@ -1,6 +1,7 @@
 // Defines Zod schema fragments for per-agent runtime configuration.
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import "zod/compile";
 import { z } from "zod";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";

@@ -1,5 +1,6 @@
 // Defines WhatsApp provider schema fragments for config parsing.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import "zod/compile";
 import { z } from "zod";
 import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";

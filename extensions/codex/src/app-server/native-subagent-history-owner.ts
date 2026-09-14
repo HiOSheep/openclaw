@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import "zod/compile";
 import { z } from "zod";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 

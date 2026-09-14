@@ -1,4 +1,5 @@
 // Voice Call helper module supports config behavior.
+import "zod/compile";
 import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";

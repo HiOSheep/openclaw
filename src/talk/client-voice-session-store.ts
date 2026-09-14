@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 /** SQLite-backed persistence for durable per-agent Talk voice-call records. */
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";

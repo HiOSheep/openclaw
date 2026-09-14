@@ -1,4 +1,5 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import "zod/compile";
 import { z } from "zod";
 import { AgentModelSchema } from "./zod-schema.agent-model.js";
 

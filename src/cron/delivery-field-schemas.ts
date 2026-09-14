@@ -1,4 +1,5 @@
 /** Parses user-provided cron delivery fields into narrow runtime values. */
+import "zod/compile";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { z, type ZodType } from "zod";
 

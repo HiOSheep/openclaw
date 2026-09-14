@@ -1,3 +1,4 @@
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";

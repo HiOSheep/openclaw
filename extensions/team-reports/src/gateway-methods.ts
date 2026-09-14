@@ -1,3 +1,4 @@
+import "zod/compile";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";

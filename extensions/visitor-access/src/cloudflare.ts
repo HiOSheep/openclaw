@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import type { VisitorAccessConfig } from "./config.js";
 import { VisitorAccessError } from "./errors.js";

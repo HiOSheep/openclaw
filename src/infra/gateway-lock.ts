@@ -1,4 +1,5 @@
 // Coordinates gateway lock files, ports, and stale owner detection.
+import "zod/compile";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";

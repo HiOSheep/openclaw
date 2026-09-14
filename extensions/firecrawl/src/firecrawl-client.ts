@@ -1,4 +1,5 @@
 // Firecrawl plugin module implements firecrawl client behavior.
+import "zod/compile";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";

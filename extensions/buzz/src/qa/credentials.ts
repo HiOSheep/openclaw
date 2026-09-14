@@ -1,3 +1,4 @@
+import "zod/compile";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";

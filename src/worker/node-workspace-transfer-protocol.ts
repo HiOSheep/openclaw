@@ -1,3 +1,4 @@
+import "zod/compile";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { workerProtocolObject } from "./protocol-record.js";

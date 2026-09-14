@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // Trusted host controller; candidate gets no broker, TDLib, capture or host socket.
+import "zod/compile";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import {

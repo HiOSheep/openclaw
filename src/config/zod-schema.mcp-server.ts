@@ -1,4 +1,5 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import "zod/compile";
 import { z } from "zod";
 import { sensitive } from "./zod-schema.sensitive.js";
 

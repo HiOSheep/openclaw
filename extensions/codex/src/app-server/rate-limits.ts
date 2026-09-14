@@ -17,6 +17,7 @@ import {
   normalizeOptionalString,
   parseStrictFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import "zod/compile";
 import { z } from "zod";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 

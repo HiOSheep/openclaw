@@ -1,3 +1,4 @@
+import "zod/compile";
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";

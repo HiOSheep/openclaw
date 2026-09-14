@@ -1,3 +1,4 @@
+import "zod/compile";
 import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";

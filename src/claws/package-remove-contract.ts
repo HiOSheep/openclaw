@@ -1,3 +1,4 @@
+import "zod/compile";
 import { Value } from "typebox/value";
 import { z } from "zod";
 import {

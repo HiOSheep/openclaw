@@ -1,3 +1,4 @@
+import "zod/compile";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import {

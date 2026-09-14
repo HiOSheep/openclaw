@@ -1,3 +1,4 @@
+import "zod/compile";
 import { appendFile } from "node:fs/promises";
 import http from "node:http";
 import { z } from "zod";

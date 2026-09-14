@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 import type { PluginLogger, PluginStateKeyedStore } from "../api.js";
 import type { VisitorPolicyClient } from "./cloudflare.js";

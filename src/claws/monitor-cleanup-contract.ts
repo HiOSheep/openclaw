@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 
 const text = z.string().min(1).max(4096);

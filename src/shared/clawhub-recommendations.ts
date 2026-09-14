@@ -1,3 +1,4 @@
+import "zod/compile";
 import { z } from "zod";
 
 export const CLAWHUB_RECOMMENDATION_LIMIT = 3;

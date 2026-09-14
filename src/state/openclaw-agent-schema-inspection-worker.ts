@@ -1,3 +1,4 @@
+import "zod/compile";
 import { fork } from "node:child_process";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
