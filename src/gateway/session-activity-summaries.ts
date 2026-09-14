@@ -249,7 +249,7 @@ export function createSessionActivitySummaries(deps: {
       entry.sessionId !== state.sessionId ||
       entry.lifecycleRevision !== state.lifecycleRevision
     ) {
-      throw new Error("Activity recap lifecycle or utility model changed");
+      throw new ActivitySummaryCancelledError();
     }
     return entry;
   };

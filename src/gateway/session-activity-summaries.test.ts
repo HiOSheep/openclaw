@@ -341,6 +341,14 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         expect(read()?.activitySummary).toBeUndefined();
         expect(view()?.state).not.toBe("current");
         expect(complete).toHaveBeenCalledTimes(1);
+        if (change === "utility-model" || change === "initialization") {
+          if (change === "initialization") {
+            await patchSessionEntryCore(scope, () => ({ initializationPending: undefined }));
+          }
+          service.ensure(target);
+          await vi.waitFor(() => expect(view()?.state).toBe("current"));
+          expect(complete).toHaveBeenCalledTimes(2);
+        }
       } finally {
         completion.resolve(result("Outdated recap must not be stored."));
         releaseWriter.resolve();

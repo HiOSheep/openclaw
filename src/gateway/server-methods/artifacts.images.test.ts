@@ -46,6 +46,47 @@ async function append(content: unknown) {
 }
 
 describe("bounded Activity image discovery", () => {
+  it("honors assistant image filters and binds pagination to the same role", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const urls = Array.from(
+        { length: 6 },
+        (_, index) => `https://images.example.test/assistant-${index}.png`,
+      );
+      await append(urls.map((url) => ({ type: "image", url })));
+      for (const role of ["user", "toolResult"]) {
+        await appendTranscriptMessage(scope, {
+          message: {
+            role,
+            content: [{ type: "image", url: `https://images.example.test/${role}.png` }],
+          },
+        });
+      }
+      const all = page(await list());
+      expect(all.artifacts.slice(0, 2).map((artifact) => artifact.image?.url)).toEqual([
+        "https://images.example.test/toolResult.png",
+        "https://images.example.test/user.png",
+      ]);
+      const filtered = page(await list({ messageRole: "assistant" }));
+      expect(filtered.artifacts.map((artifact) => artifact.image?.url)).toEqual(
+        urls.toReversed().slice(0, 4),
+      );
+      expect(await list({ cursor: filtered.nextCursor })).toMatchObject({
+        ok: false,
+        error: { details: { type: "artifact_cursor_invalid" } },
+      });
+      expect(await list({ cursor: all.nextCursor, messageRole: "assistant" })).toMatchObject({
+        ok: false,
+        error: { details: { type: "artifact_cursor_invalid" } },
+      });
+      const remaining = page(await list({ cursor: filtered.nextCursor, messageRole: "assistant" }));
+      expect(remaining.artifacts.map((artifact) => artifact.image?.url)).toEqual(
+        urls.slice(0, 2).toReversed(),
+      );
+      expect(remaining.nextCursor).toBeUndefined();
+    });
+  });
+
   it("pages newest images within one message and includes Markdown local images without reading files", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
