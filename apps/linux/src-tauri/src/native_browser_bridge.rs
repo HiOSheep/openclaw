@@ -196,23 +196,20 @@ pub fn dashboard_is_current(app: &AppHandle, webview: &Webview) -> bool {
     webview.label() == "main"
         && webview
             .url()
-            .is_ok_and(|url| dashboard_source_matches(app, &url, true))
+            .is_ok_and(|url| dashboard_source_matches(app, &url))
 }
 
-pub fn dashboard_window_source_is_current(app: &AppHandle, source: &Url) -> bool {
-    dashboard_source_matches(app, source, false)
-}
-
-fn dashboard_source_matches(app: &AppHandle, source: &Url, require_ready: bool) -> bool {
+fn dashboard_source_matches(app: &AppHandle, source: &Url) -> bool {
     let Some(state) = app.try_state::<NativeBrowserBridgeState>() else {
         return false;
     };
     let Ok(inner) = state.inner.lock() else {
         return false;
     };
-    inner.document.as_ref().is_some_and(|document| {
-        (!require_ready || document.ready) && matches_dashboard(source, &document.url)
-    })
+    inner
+        .document
+        .as_ref()
+        .is_some_and(|document| document.ready && matches_dashboard(source, &document.url))
 }
 
 // Native callbacks can already hold the runtime's webview registry borrow. Their

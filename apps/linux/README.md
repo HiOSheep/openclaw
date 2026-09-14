@@ -36,7 +36,7 @@ requirement.
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
-With the matching desktop app running, it uses the app’s selected Gateway and
+With the matching desktop app running, it uses the app’s Primary Gateway and
 keeps a single visible OpenClaw icon. See [Omarchy support](https://docs.openclaw.ai/platforms/omarchy)
 for installation, app handoff, shortcuts, and troubleshooting.
 
@@ -163,6 +163,23 @@ double-click maximize/restore, caption buttons, corner resizing, and closing to
 the tray. Screenshots and observed window geometry remain in the artifact
 directory. This X11 proof does not replace testing a Wayland compositor.
 
+### Native Gateway switching regression on Linux
+
+The same isolated driver covers saved connections, window reuse, restart
+selection, and failed-connection recovery. Install `gnome-keyring` alongside the
+native title bar test dependencies, then run:
+
+```bash
+xvfb-run -a -s '-screen 0 1440x1080x24' dbus-run-session -- \
+  /usr/bin/python3 apps/linux/tests/first_run.py \
+  apps/linux/src-tauri/target/debug/openclaw-desktop --gateway-switch \
+  --artifacts-dir /tmp/openclaw-gateway-switch-proof
+```
+
+The driver owns its temporary HOME and Secret Service. It verifies that ordinary
+window selection leaves the Primary configuration unchanged. The Linux App
+workflow runs this scenario and retains its screenshots and results.
+
 ## First-run setup
 
 The welcome screen explains what OpenClaw can do and asks where your assistant
@@ -198,6 +215,27 @@ to the saved remote Gateway with freshly resolved credentials without rewriting
 configuration or installing or starting a local service. Opening the remote
 dashboard does not prove Gateway availability or successful authentication; check
 the dashboard for HTTP errors, authentication prompts, and Gateway readiness.
+
+### Switching Gateways
+
+Use **Gateways → Manage Gateways…** in the app or tray menu to save a direct URL
+or SSH connection. Saved credentials stay in this app's system credential store;
+editing a connection keeps its token and password fields empty. Leave both blank
+to retain the credentials for the same endpoint.
+
+The dashboard's profile menu switches the current window to a saved Gateway.
+Command-click or Control-click opens another window. The native **Gateways** menu
+opens or focuses an existing Gateway window without reloading its current page;
+**Open … in New Window** creates an independent window. Successful explicit
+selection is remembered across app restarts. Removing a selected Gateway returns
+the main window to Primary and closes that Gateway's other windows.
+
+Selecting a dashboard does not change the **Primary Gateway**, Quick Chat, or the
+desktop connection. **Set as Primary** is a separate, confirmed action for saved
+token-authenticated connections. Primary reconnects leave independently selected
+Gateway windows alone. **Connection Settings** continues to edit the Primary
+connection. Saved Tauri connections are separate from the native macOS app's
+saved connections and browser sign-in sessions.
 
 After connecting, Model Setup discovers AI access available to the selected
 Gateway and shows it as a choice. Discovery never imports or copies an account,

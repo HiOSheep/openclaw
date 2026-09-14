@@ -1,0 +1,381 @@
+"""Native Gateway selection with real WebKit, menus and an isolated Secret Service.
+
+first_run.py owns the private HOME and DBus session. The synthetic dashboard
+consumes the same native Gateway contract as the shared Control UI.
+"""
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import time
+from urllib.parse import urlsplit
+
+from inline_browser import FixtureHandler, GatewayFixture
+from window_chrome import WindowChromeFixture
+
+
+DASHBOARD = """<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>__NAME__ · Gateway switch proof</title>
+<style>
+body{margin:0;background:#101319;color:#f4f5f7;font:16px system-ui,sans-serif}
+header{height:52px;box-sizing:border-box;padding:14px 24px;background:#191e27}
+main{padding:38px;max-width:850px}h1{font-size:30px;margin-bottom:12px}
+p{color:#aab4c6;line-height:1.6}button{font:inherit;padding:10px 15px;margin:6px 8px 6px 0;
+border-radius:8px;border:1px solid #3b465a;background:#242e3e;color:#f4f5f7}
+#selection{color:#6ee7b7}#marker{display:block;color:#aab4c6;margin-top:20px}
+</style><script>
+window.dispatchEvent(new Event('openclaw:native-window-chrome-available'));
+</script></head><body><header id="header">OPENCLAW · SYNTHETIC GATEWAY PROOF</header>
+<main><h1>__NAME__</h1><p>Local fixture data. This dashboard exercises the real desktop
+Gateway selection adapter and native windows.</p><p id="selection">Waiting for native Gateway selection…</p>
+<div id="controls"></div><p id="marker">Independent dashboard state: 0</p>
+<button id="advance">Advance dashboard state</button></main><script>
+const instance = crypto.randomUUID();
+const page = __PAGE__;
+let clicks = 0;
+const send = message => window.webkit.messageHandlers.openclawGateways.postMessage(message);
+const report = () => fetch('/fixture/report', {method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({page,instance,clicks,current:window.__OPENCLAW_NATIVE_GATEWAYS__?.currentId,
+    tokenMatches:page==='secondary' ? window.__OPENCLAW_NATIVE_CONTROL_AUTH__?.token==='synthetic-gateway-token' : true})});
+function render() {
+  const state = window.__OPENCLAW_NATIVE_GATEWAYS__;
+  if (!state) return;
+  document.getElementById('selection').textContent = 'Selected: ' +
+    (state.gateways.find(g => g.id === state.currentId)?.name ?? state.currentId);
+  const controls = document.getElementById('controls');
+  controls.replaceChildren();
+  for (const gateway of state.gateways) {
+    const button = document.createElement('button');
+    button.textContent = 'Select ' + gateway.name;
+    button.onclick = () => send({type:'select',id:gateway.id});
+    controls.append(button);
+  }
+  void report();
+}
+document.getElementById('advance').onclick = () => {
+  document.getElementById('marker').textContent = 'Independent dashboard state: ' + (++clicks);
+  void report();
+};
+document.getElementById('header').onmousedown = () =>
+  window.webkit.messageHandlers.openclawWindowDrag?.postMessage({type:'window-drag'});
+window.addEventListener('openclaw:native-gateways-changed', render);
+render();
+</script></body></html>"""
+
+
+class SwitchHandler(FixtureHandler):
+    def do_GET(self):
+        if self.headers.get("Upgrade"):
+            self.server.websocket_paths.append(self.path)
+            self.reply(501)
+        elif self.path in ("/fixture/", "/secondary/"):
+            page = "primary" if self.path == "/fixture/" else "secondary"
+            self.server.loads[page] += 1
+            body = DASHBOARD.replace("__NAME__", "Primary Gateway" if page == "primary" else "Studio Gateway")
+            self.reply(200, body.replace("__PAGE__", json.dumps(page)).encode(), "text/html; charset=utf-8")
+        else:
+            self.reply(404)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        if self.path != "/fixture/report" or not 0 < length < 4096:
+            self.reply(400)
+            return
+        payload = json.loads(self.rfile.read(length))
+        self.server.reports[payload["instance"]] = payload
+        self.reply(200, b"{}", "application/json")
+
+
+class GatewaySwitchFixture(GatewayFixture):
+    def __init__(self, artifacts_dir):
+        super().__init__(artifacts_dir)
+        self.RequestHandlerClass = SwitchHandler
+        self.chrome = WindowChromeFixture(None)
+        self.vault = None
+        self.restarted_app = None
+        self.loads = {"primary": 0, "secondary": 0}
+        self.reports = {}
+        self.websocket_paths = []
+        self.config_hash = None
+
+    def start(self):
+        from gi.repository import Gio, GLib
+
+        self.chrome.start()
+        self.vault = subprocess.Popen(
+            ["gnome-keyring-daemon", "--foreground", "--unlock", "--components=secrets"],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        self.vault.stdin.write(b"synthetic-private-vault\n")
+        self.vault.stdin.close()
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        self.chrome.until(lambda: bus.call_sync(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+            "NameHasOwner", GLib.Variant("(s)", ("org.freedesktop.secrets",)), None,
+            Gio.DBusCallFlags.NONE, 1000, None,
+        ).unpack()[0], "the isolated credential vault")
+        super().start()
+        self.config_hash = self.primary_hash()
+
+    @staticmethod
+    def primary_hash():
+        return hashlib.sha256((Path.home() / ".openclaw/openclaw.json").read_bytes()).hexdigest()
+
+    def windows(self, app):
+        return {
+            parts[0]: parts[4]
+            for line in self.chrome.command("wmctrl", "-lp").splitlines()
+            if len(parts := line.split(None, 4)) == 5 and parts[2] == str(app.pid)
+        }
+
+    def capture(self, name):
+        if self.artifacts_dir:
+            time.sleep(1)
+            self.chrome.command("import", "-window", "root", str(self.artifacts_dir / f"gateway-switch-{name}.png"))
+
+    def exercise(self, app, _binary, wait, Atspi, restart):
+        def in_active_window(node):
+            while node is not None and node.get_localized_role_name() != "application":
+                if node.get_state_set().contains(Atspi.StateType.ACTIVE):
+                    return True
+                node = node.get_parent()
+            return False
+
+        def click(label, role=("button", "push button", "toggle button")):
+            node = wait(label, role, predicate=in_active_window)
+            component = node.get_component_iface()
+            component.scroll_to(Atspi.ScrollType.ANYWHERE)
+            bounds = component.get_extents(Atspi.CoordType.SCREEN)
+            self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
+                                str(bounds.y + bounds.height // 2), "click", "1")
+
+        def focus_input(label):
+            node = wait(label, ("entry", "text", "password text"), predicate=lambda node:
+                        node.get_state_set().contains(Atspi.StateType.EDITABLE) and in_active_window(node))
+            component = node.get_component_iface()
+            component.scroll_to(Atspi.ScrollType.ANYWHERE)
+            bounds = component.get_extents(Atspi.CoordType.SCREEN)
+            self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
+                                str(bounds.y + bounds.height // 2), "click", "1")
+
+        def fill(label, value):
+            focus_input(label)
+            self.chrome.command("xdotool", "key", "ctrl+a")
+            self.chrome.command("xdotool", "type", "--clearmodifiers", "--delay", "10", value)
+
+        def open_auth():
+            # WebKit does not expose <summary> consistently through AT-SPI.
+            # Exercise its keyboard path from the preceding URL input.
+            focus_input("Gateway URL")
+            self.chrome.command("xdotool", "key", "Tab", "space")
+
+        def select(name, window):
+            self.chrome.command("wmctrl", "-ia", window)
+            click("Select " + name)
+            wait("Selected: " + name)
+
+        def record(name, result=True):
+            self.chrome.record(name, result)
+            if self.primary_hash() != self.config_hash:
+                raise RuntimeError(f"{name} changed the Primary Gateway config")
+
+        wait("Primary Gateway", "heading")
+        main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "main window")
+        self.chrome.command("wmctrl", "-ir", main, "-e", "0,35,45,1050,720")
+        time.sleep(0.3)
+        initial = self.chrome.geometry(main)
+        self.capture("before-primary")
+        wait("Selected: Primary Gateway")
+        self.open_native_menu(app, "Manage Gateways…")
+        wait("Manage Gateways", "heading")
+        wait("No saved Gateways yet. Add a connection to get started.")
+        click("Add Gateway")
+        fill("Name", "Studio Gateway")
+        fill("Gateway URL", f"http://127.0.0.1:{self.server_port}/secondary/")
+        open_auth()
+        fill("Gateway token", "synthetic-gateway-token")
+        click("Save Gateway")
+        wait("Saved Studio Gateway.")
+        self.capture("after-saved")
+        record("saved profile through local editor and system credential vault")
+
+        for name in ("Studio Gateway", "Primary Gateway", "Studio Gateway"):
+            select(name, main)
+            if main not in self.windows(app) or self.chrome.geometry(main) != initial:
+                raise RuntimeError("Gateway selection replaced or resized the main native shell")
+        record("same shell A to B to A to B", {"window": main, "geometry": initial})
+        self.capture("after-selected")
+        self.chrome.until(lambda: any(r["page"] == "secondary" and r["tokenMatches"] for r in self.reports.values()),
+                          "saved token delivered only to the target dashboard")
+        record("saved token delivered to secondary dashboard")
+        self.open_native_menu(app, "Quick Chat")
+        quickchat = self.chrome.until(
+            lambda: next((window for window, title in self.windows(app).items() if title == "Quick Chat"), None),
+            "the native Quick Chat window",
+        )
+        self.chrome.command("wmctrl", "-ia", quickchat)
+        self.chrome.until(lambda: int(self.chrome.command("xprop", "-root", "_NET_ACTIVE_WINDOW").split()[-1], 16)
+                          == int(quickchat, 16), "native Quick Chat focus")
+        quick_input = wait("Quick Chat message", ("entry", "text"), predicate=in_active_window)
+        bounds = quick_input.get_component_iface().get_extents(Atspi.CoordType.SCREEN)
+        self.chrome.command("xdotool", "mousemove", str(bounds.x + bounds.width // 2),
+                            str(bounds.y + bounds.height // 2), "click", "1")
+        self.chrome.until(lambda: "/fixture/" in self.websocket_paths, "Primary native chat RPC demand")
+        self.chrome.command("xdotool", "key", "Escape")
+        self.chrome.until(lambda: len(self.windows(app)) == 2, "Quick Chat to hide")
+        self.chrome.command("wmctrl", "-ia", main)
+        record("Quick Chat RPC stays on Primary while Studio is selected")
+        click("Advance dashboard state")
+        wait("Independent dashboard state: 1")
+        previous_loads = dict(self.loads)
+        select("Studio Gateway", main)
+        wait("Independent dashboard state: 1")
+        if self.loads != previous_loads:
+            raise RuntimeError("Selecting the current Gateway reset its dashboard")
+        record("reselect preserves current dashboard state")
+
+        for action in ("Back", "Connect to Gateway"):
+            self.open_native_menu(app, "Connection Settings")
+            wait("Connection Settings", "heading")
+            entry = wait("Gateway URL", ("entry", "text"), predicate=lambda node:
+                         node.get_state_set().contains(Atspi.StateType.EDITABLE) and in_active_window(node))
+            if Atspi.Text.get_text(entry.get_text_iface(), 0, -1) != f"ws://127.0.0.1:{self.server_port}/fixture/":
+                raise RuntimeError("Connection Settings did not describe Primary while Studio was selected")
+            self.capture("primary-settings-" + ("cancel" if action == "Back" else "save"))
+            config_path = Path.home() / ".openclaw/openclaw.json"
+            before_settings = json.loads(config_path.read_text())
+            click(action)
+            wait("Studio Gateway", "heading")
+            wait("Selected: Studio Gateway")
+            if json.loads(config_path.read_text()) != before_settings:
+                raise RuntimeError("Saving the same Primary connection changed its settings")
+            if action == "Connect to Gateway":
+                # Explicit Save may normalize JSON formatting; window selection
+                # before and after this operation must still preserve its bytes.
+                self.config_hash = self.primary_hash()
+            if main not in self.windows(app) or self.chrome.geometry(main) != initial:
+                raise RuntimeError("Primary Connection Settings replaced or resized the saved Gateway shell")
+            record("Primary Connection Settings " + ("cancel" if action == "Back" else "save") + " returns to Studio")
+
+        app = restart("openclaw://dashboard")
+        wait("Studio Gateway", "heading")
+        wait("Selected: Studio Gateway")
+        main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "restored main window")
+        self.capture("after-restart")
+        record("first-launch dashboard deep link restores saved selection from system credential vault")
+
+        cli = Path.home() / ".openclaw/bin/openclaw"
+        disabled_cli = cli.with_name("openclaw-disabled")
+        primary_config = Path.home() / ".openclaw/openclaw.json"
+        saved_config = primary_config.read_bytes()
+        cli.rename(disabled_cli)
+        primary_config.write_text(json.dumps({"gateway": {"mode": "local"}}))
+        unavailable_hash = self.primary_hash()
+        try:
+            app = restart()
+            wait("Studio Gateway", "heading")
+            wait("Selected: Studio Gateway")
+            if self.primary_hash() != unavailable_hash:
+                raise RuntimeError("Saved Gateway restoration modified the unavailable Primary config")
+            self.chrome.record("saved Gateway restores without a configured Primary or installed CLI", True)
+            self.capture("without-primary")
+        finally:
+            primary_config.write_bytes(saved_config)
+            disabled_cli.rename(cli)
+        app = restart()
+        wait("Studio Gateway", "heading")
+        wait("Selected: Studio Gateway")
+        main = self.chrome.until(lambda: next(iter(self.windows(app)), None), "main after restoring fixture CLI")
+
+        self.open_native_menu(app, "Manage Gateways…")
+        wait("Manage Gateways", "heading")
+        settings = next(window for window in self.windows(app) if window != main)
+        click("Edit Studio Gateway")
+        click("Connection type", "combo box")
+        self.chrome.command("xdotool", "key", "End", "Return")
+        fill("SSH target", f"fixture@127.0.0.1:{urlsplit(self.refused_url).port}")
+        recovery_geometry = self.chrome.geometry(main)
+        click("Save Gateway")
+        wait("Saved Studio Gateway.")
+        self.chrome.command("wmctrl", "-ic", settings)
+        self.chrome.command("wmctrl", "-ia", main)
+        wait("Edit Gateway", "heading")
+        wait("SSH connection failed:", prefix=True)
+        self.capture("failed-edit-recovery")
+        click("Connection type", "combo box")
+        self.chrome.command("xdotool", "key", "Home", "Return")
+        fill("Gateway URL", f"http://127.0.0.1:{self.server_port}/secondary/")
+        open_auth()
+        fill("Gateway token", "synthetic-gateway-token")
+        click("Save Gateway")
+        wait("Studio Gateway", "heading")
+        wait("Selected: Studio Gateway")
+        if main not in self.windows(app) or self.chrome.geometry(main) != recovery_geometry:
+            raise RuntimeError("Profile edit recovery replaced or resized the native shell")
+        record("failed SSH profile edit recovers through local settings in the same shell")
+        self.capture("after-edit-recovery")
+
+        self.open_native_menu(app, "Open Studio Gateway in New Window")
+        self.chrome.until(lambda: len(self.windows(app)) == 2, "a separate Gateway window")
+        secondary = next(window for window in self.windows(app) if window != main)
+        self.chrome.command("wmctrl", "-ia", secondary)
+        click("Advance dashboard state")
+        wait("Independent dashboard state: 1")
+        previous_loads = dict(self.loads)
+        self.chrome.command("wmctrl", "-ia", main)
+        self.open_native_menu(app, "Studio Gateway")
+        time.sleep(0.4)
+        if len(self.windows(app)) != 2 or self.loads != previous_loads:
+            raise RuntimeError("Focus Gateway created or navigated a native window")
+        record("native focus reuses an existing window without navigation", {"windows": self.windows(app)})
+        self.open_native_menu(app, "Open Studio Gateway in New Window")
+        self.chrome.until(lambda: len(self.windows(app)) == 3, "an independent third native window")
+        record("new window always creates independent Gateway shell", {"windows": self.windows(app)})
+        self.capture("after-windows")
+
+        self.open_native_menu(app, "Manage Gateways…")
+        wait("Manage Gateways", "heading")
+        click("Edit Studio Gateway")
+        open_auth()
+        entry = wait("Gateway token", ("entry", "text", "password text"), predicate=lambda node:
+                     node.get_state_set().contains(Atspi.StateType.EDITABLE))
+        if Atspi.Text.get_text(entry.get_text_iface(), 0, -1):
+            raise RuntimeError("The editor exposed a saved credential")
+        click("Cancel")
+        record("saved credential is not disclosed by the editor")
+        click("Remove Studio Gateway")
+        wait("Remove Gateway?", "heading")
+        click("Remove Gateway")
+        wait("No saved Gateways yet. Add a connection to get started.")
+        self.chrome.until(lambda: len(self.windows(app)) == 2, "removed Gateway auxiliary windows to close")
+        self.chrome.command("wmctrl", "-ia", main)
+        wait("Primary Gateway", "heading")
+        wait("Selected: Primary Gateway")
+        record("remove closes auxiliary windows and restores Primary in main")
+        self.capture("after-removal")
+        if "/fixture/" not in self.websocket_paths:
+            raise RuntimeError("The Primary Gateway RPC connection was not observed")
+        if "/secondary/" in self.websocket_paths:
+            raise RuntimeError("Window selection retargeted the Primary Gateway RPC client")
+        record("Primary RPC client never connects to a secondary Gateway", {"paths": sorted(set(self.websocket_paths))})
+        self.passed = True
+        print("PASS: native Gateway selection, credential persistence, focus/new windows and removal", flush=True)
+
+    def close(self):
+        if self.restarted_app is not None and self.restarted_app.poll() is None:
+            self.restarted_app.terminate()
+            self.restarted_app.wait(timeout=5)
+        self.shutdown()
+        self.server_close()
+        self.server_thread.join(timeout=5)
+        if self.vault is not None and self.vault.poll() is None:
+            self.vault.terminate()
+            self.vault.wait(timeout=5)
+        self.chrome.close()
+        if self.artifacts_dir:
+            (self.artifacts_dir / "gateway-switch-results.json").write_text(json.dumps({
+                "passed": self.passed, "checks": self.chrome.checks,
+                "primaryConfigSha256": self.config_hash, "loads": self.loads,
+                "dashboardReports": list(self.reports.values()),
+            }, indent=2) + "\n")
