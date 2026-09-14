@@ -1,15 +1,21 @@
 package ai.openclaw.app.gateway
 
+import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.closeNodeRuntimeTestFixture
+import ai.openclaw.app.drainWithMainLooper
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.job
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -34,9 +40,11 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.runners.model.MultipleFailureException
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.io.IOException
 import java.net.InetAddress
 import java.util.UUID
@@ -54,8 +62,7 @@ private const val MEDIA_PATH = "/api/chat/media/outgoing/main/11111111-1111-4111
 class GatewayIngressWireTest {
   @Test
   fun pinnedSocketsAndMediaKeepHeadersAndRejectForeignAuthorityAndRedirects() =
-    runBlocking {
-      val fixture = WireFixture()
+    withFixture { fixture ->
       val foreign =
         MockWebServer().apply {
           useHttps(gatewayTestTlsIdentity().socketFactory, false)
@@ -63,15 +70,9 @@ class GatewayIngressWireTest {
         }
       try {
         fixture.prepare()
-        val node = fixture.connect("node")
-        val operator = fixture.connect("operator")
-        withTimeout(WIRE_TIMEOUT_MS) {
-          node.second.await()
-          operator.second.await()
-        }
-        val media = checkNotNull(fixture.load(operator.first))
+        val media = checkNotNull(fixture.load(fixture.operator, fixture.primary))
         assertArrayEquals(byteArrayOf(1, 2, 3), media.bytes)
-        val protected = fixture.requests.filter { it.getHeader("Upgrade") == "websocket" || it.path == MEDIA_PATH }
+        val protected = fixture.requests.filter { it.getHeader("Upgrade") == "websocket" || it.path == fixture.primary.contextPath + MEDIA_PATH }
         assertEquals(3, protected.size)
         protected.forEach {
           assertNotNull(it.handshake)
@@ -80,7 +81,7 @@ class GatewayIngressWireTest {
           assertNull(it.getHeader("Authorization"))
           assertNull(it.getHeader("Cookie"))
         }
-        assertEquals(setOf("node", "operator"), fixture.roles.toSet())
+        assertEquals(setOf("node", "operator"), fixture.peers.map { it.role }.toSet())
         assertTrue(fixture.gatewayTokens.all { it == "gateway-pairing-token" })
         val wrongOrigin = Request.Builder().url("https://127.0.0.1:${foreign.port}/leak").build()
         assertTrue(
@@ -91,102 +92,155 @@ class GatewayIngressWireTest {
           }.exceptionOrNull() is GatewayExternalAuthorizationException,
         )
         fixture.redirect.set("https://127.0.0.1:${foreign.port}/leak")
-        assertNull(fixture.load(operator.first))
+        assertNull(fixture.load(fixture.operator, fixture.primary))
         assertEquals(0, foreign.requestCount)
-        assertEquals(2, fixture.requests.count { it.path == MEDIA_PATH })
+        assertEquals(2, fixture.requests.count { it.path == fixture.primary.contextPath + MEDIA_PATH })
       } finally {
-        try {
-          fixture.bounded { foreign.shutdown() }
-        } finally {
-          fixture.close()
-        }
+        fixture.bounded { foreign.shutdown() }
       }
     }
 
   @Test
-  fun retirementJoinsHeldTlsMediaAndPreventsDelayedUpgradeAndRangeRequests() =
-    runBlocking {
-      for (action in listOf("signOut", "forget", "replaceAccount")) {
-        val fixture = WireFixture()
-        try {
-          fixture.prepare()
-          val operator = fixture.connect("operator")
-          withTimeout(WIRE_TIMEOUT_MS) { operator.second.await() }
-          val capability = checkNotNull(fixture.load(operator.first))
-          fixture.holdMedia.set(true)
-          fixture.holdProbe.set(true)
-          val pendingNode = fixture.connect("node")
-          withTimeout(WIRE_TIMEOUT_MS) { fixture.probeStarted.await() }
-          val request =
-            Request
-              .Builder()
-              .url(fixture.url(MEDIA_PATH))
-              .apply {
-                capability.headers.forEach { (name, value) -> header(name, value) }
-              }.build()
-          val call = capability.client.newCall(request)
-          fixture.calls.add(call)
-          fixture.bounded { call.execute() }.use { response ->
-            assertEquals(
-              1,
-              fixture.bounded {
-                response.body
-                  .source()
-                  .readByte()
-                  .toInt()
-              },
-            )
-            val reading = CompletableDeferred<Unit>()
-            val pending =
-              fixture.scope.async(Dispatchers.IO) {
-                reading.complete(Unit)
-                runCatching { response.body.source().readByte() }
-              }
-            withTimeout(WIRE_TIMEOUT_MS) { reading.await() }
-            fixture.bounded {
-              when (action) {
-                "forget" -> {
-                  fixture.owner.forget(fixture.endpoint.stableId)
-                }
-
-                "replaceAccount" -> {
-                  fixture.holdProbe.set(false)
-                  fixture.replaceAccount()
-                  fixture.prepare(userInitiated = true)
-                }
-
-                else -> {
-                  checkNotNull(fixture.owner.signOut(fixture.endpoint.stableId)).await()
-                }
-              }
-              // The production retirement must cancel the Call and finish both session owners itself.
-              assertTrue(call.isCanceled())
-              assertTrue(operator.third.isCompleted)
-              assertTrue(pendingNode.third.isCompleted)
-              fixture.releaseProbe.countDown()
-              assertTrue(pending.await().exceptionOrNull() is IOException)
-            }
+  fun retirementJoinsHeldTlsMediaAndPreventsDelayedUpgradeAndRangeRequests() {
+    for (action in listOf("signOut", "forget", "replaceAccount")) {
+      withFixture { fixture ->
+        fixture.prepare()
+        fixture.connectFleet()
+        val secondary = fixture.secondary(fixture.managed)
+        val ordinary = fixture.secondary(fixture.ordinary)
+        assertEquals(fixture.origin, fixture.owner.managedOrigin(fixture.primary))
+        assertEquals(fixture.origin, fixture.owner.managedOrigin(fixture.managed))
+        assertNull(fixture.owner.managedOrigin(fixture.ordinary))
+        val primaryCapability = checkNotNull(fixture.load(fixture.operator, fixture.primary))
+        val secondaryCapability = checkNotNull(fixture.load(secondary, fixture.managed))
+        fixture.assertOrdinaryWorks(ordinary)
+        val oldToken = fixture.acceptedToken.get()
+        val oldPeers = fixture.peers.filter { it.token == oldToken }
+        assertEquals(3, oldPeers.size)
+        val controlPeers = fixture.peers.filter { it.path == fixture.ordinary.contextPath }
+        assertEquals(1, controlPeers.size)
+        fixture.holdMedia.set(true)
+        val primaryRead = fixture.holdRead(primaryCapability, fixture.primary)
+        val secondaryRead = fixture.holdRead(secondaryCapability, fixture.managed)
+        fixture.holdProbe.set(true)
+        fixture.runtime.refreshGatewayConnection()
+        withTimeout(WIRE_TIMEOUT_MS) { fixture.probeStarted.await() }
+        val preparing = checkNotNull(ReflectionHelpers.getField<Job?>(fixture.runtime, "ingressPreparation"))
+        // The queued refresh has not drained the active generation; the action below must do it.
+        assertTrue(fixture.node.isReady())
+        assertTrue(fixture.operator.isReady())
+        assertTrue(secondary.isReady())
+        assertFalse(primaryRead.call.isCanceled())
+        assertFalse(secondaryRead.call.isCanceled())
+        assertTrue(oldPeers.none { it.closed.isCompleted })
+        val oldUpgradeCount = fixture.oldUpgrades(oldToken)
+        when (action) {
+          "forget" -> {
+            assertTrue(fixture.bounded { fixture.runtime.forgetGateway(fixture.primary.stableId) })
+            fixture.assertRetired(listOf(fixture.node, fixture.operator), oldPeers.filter { it.path == fixture.primary.contextPath }, listOf(primaryRead))
+            assertTrue(secondary.isReady())
+            assertFalse(secondaryRead.call.isCanceled())
+            assertTrue(oldPeers.filter { it.path == fixture.managed.contextPath }.none { it.closed.isCompleted })
+            assertNotNull(fixture.persistedGrant())
+            assertNull(fixture.prefs.loadGatewayCredentials(fixture.primary.stableId).token)
+            assertTrue(fixture.prefs.loadGatewayCustomHeaders(fixture.primary.stableId).isEmpty())
+            fixture.assertPairing(fixture.managed)
+            assertEquals("{}", fixture.bounded { secondary.requestForEndpoint(fixture.managed.stableId, "health", null) })
+            fixture.assertOrdinaryWorks(ordinary)
+            // The last managed profile owns origin retirement; an ordinary same-origin profile does not.
+            assertTrue(fixture.bounded { fixture.runtime.forgetGateway(fixture.managed.stableId) })
+            fixture.assertRetired(listOf(secondary), oldPeers.filter { it.path == fixture.managed.contextPath }, listOf(secondaryRead))
+            assertNull(fixture.persistedGrant())
           }
-          assertFalse(fixture.probeExpired.get())
-          assertFalse(pendingNode.second.isCompleted)
-          assertEquals(1, fixture.requests.count { it.getHeader("Upgrade") == "websocket" })
-          assertEquals(2, fixture.requests.count { it.path == MEDIA_PATH })
-          val before = fixture.requests.size
-          val late = capability.client.newCall(request.newBuilder().header("Range", "bytes=1-").build())
-          fixture.calls.add(late)
-          assertTrue(runCatching { fixture.bounded { late.execute().close() } }.exceptionOrNull() is GatewayExternalAuthorizationException)
-          assertEquals(before, fixture.requests.size)
-          if (action != "replaceAccount") assertNull(fixture.stored.get())
-        } finally {
-          fixture.close()
+
+          "replaceAccount" -> {
+            fixture.bounded { fixture.replaceAccount() }
+            fixture.assertRetired(listOf(fixture.node, fixture.operator, secondary), oldPeers, listOf(primaryRead, secondaryRead))
+            fixture.assertPairing(fixture.primary)
+            fixture.assertPairing(fixture.managed)
+            assertNotNull(fixture.persistedGrant())
+          }
+
+          else -> {
+            fixture.bounded { checkNotNull(fixture.owner.signOut(fixture.primary.stableId)).await() }
+            fixture.assertRetired(listOf(fixture.node, fixture.operator, secondary), oldPeers, listOf(primaryRead, secondaryRead))
+            fixture.assertPairing(fixture.primary)
+            fixture.assertPairing(fixture.managed)
+            assertNull(fixture.persistedGrant())
+          }
+        }
+        assertTrue(controlPeers.none { it.closed.isCompleted })
+        fixture.assertOrdinaryWorks(ordinary)
+        if (action == "replaceAccount") {
+          assertFalse(
+            fixture.runtime.gatewayConnectionDisplay.value.problem
+              ?.code == "EXTERNAL_AUTH_REQUIRED",
+          )
+        }
+        fixture.releaseProbe.countDown()
+        withTimeout(WIRE_TIMEOUT_MS) { preparing.join() }
+        // A terminal rejection proves the released old response never scheduled a later socket owner.
+        if (action == "replaceAccount") {
+          assertEquals(
+            "EXTERNAL_AUTH_REQUIRED",
+            fixture.runtime.gatewayConnectionDisplay.value.problem
+              ?.code,
+          )
+        } else {
+          assertTrue(preparing.isCancelled)
+        }
+        assertNull(ReflectionHelpers.getField<Any?>(fixture.node, "desired"))
+        assertNull(ReflectionHelpers.getField<Any?>(fixture.operator, "desired"))
+        assertFalse(fixture.probeExpired.get())
+        assertEquals(oldUpgradeCount, fixture.oldUpgrades(oldToken))
+        fixture.assertLateDenied(primaryRead)
+        fixture.assertLateDenied(secondaryRead)
+        if (action == "replaceAccount") {
+          fixture.holdMedia.set(false)
+          fixture.connectPrimary()
+          fixture.connectFleet()
+          assertArrayEquals(byteArrayOf(1, 2, 3), checkNotNull(fixture.load(fixture.operator, fixture.primary)).bytes)
+          val fresh = fixture.peers.filter { it.token == fixture.acceptedToken.get() }
+          assertEquals(3, fresh.size)
+          assertTrue(fresh.none { it.closed.isCompleted })
+          assertEquals(oldUpgradeCount, fixture.oldUpgrades(oldToken))
         }
       }
     }
+  }
+
+  private fun withFixture(block: suspend (WireFixture) -> Unit) {
+    val fixture = WireFixture()
+    val failures = mutableListOf<Throwable>()
+    try {
+      drainWithMainLooper { block(fixture) }
+    } catch (error: Throwable) {
+      failures.add(error)
+    } finally {
+      runCatching { fixture.close() }.exceptionOrNull()?.let(failures::add)
+    }
+    MultipleFailureException.assertEmpty(failures)
+  }
+
+  private class Peer(
+    val path: String?,
+    val token: String?,
+  ) {
+    @Volatile var role: String? = null
+    val closed = CompletableDeferred<Unit>()
+  }
+
+  private class HeldRead(
+    val capability: GatewayLoadedMedia.Buffered,
+    val request: Request,
+    val call: Call,
+    val pending: Deferred<Result<Byte>>,
+  )
 
   private class WireFixture {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val requests = ConcurrentLinkedQueue<RecordedRequest>()
-    val roles = ConcurrentLinkedQueue<String>()
+    val peers = ConcurrentLinkedQueue<Peer>()
     val gatewayTokens = ConcurrentLinkedQueue<String>()
     val holdProbe = AtomicBoolean(false)
     val holdMedia = AtomicBoolean(false)
@@ -195,81 +249,53 @@ class GatewayIngressWireTest {
     val releaseProbe = CountDownLatch(1)
     val probeExpired = AtomicBoolean(false)
     val calls = ConcurrentLinkedQueue<Call>()
+    private val responses = ConcurrentLinkedQueue<Response>()
     private val identity = gatewayTestTlsIdentity()
     val server =
       MockWebServer().apply {
         useHttps(identity.socketFactory, false)
         start(InetAddress.getByName("127.0.0.1"), 0)
       }
-    val endpoint = GatewayEndpoint.manual("127.0.0.1", server.port, true)
-    private val tls = GatewayTlsParams(true, identity.fingerprint, false, endpoint.stableId)
+    val primary = GatewayEndpoint.manual("127.0.0.1", server.port, true, "/primary")
+    val managed = GatewayEndpoint.manual("127.0.0.1", server.port, true, "/managed-secondary")
+    val ordinary = GatewayEndpoint.manual("127.0.0.1", server.port, true, "/ordinary")
     private val application = CloudflareAccessTestTokens.application.copy(origin = CloudflareAccessOrigin.from(url("/")))
+    val origin get() = application.origin
     private var nextSession = newSession("wire-first")
     val acceptedToken = AtomicReference(checkNotNull(nextSession.authorizationHeader(url("/"))))
-    val stored = AtomicReference<String?>(nextSession.encode())
-    private val sessions = mutableListOf<GatewaySession>()
     private val app = RuntimeEnvironment.getApplication()
-    private val prefs = SecurePrefs(app, app.getSharedPreferences("access-wire-${UUID.randomUUID()}", Context.MODE_PRIVATE))
-    private val registry =
-      GatewayRegistryStore(prefs).apply {
-        upsert(GatewayRegistryEntry(endpoint.stableId, GatewayRegistryEntryKind.MANUAL, "Wire fixture", endpoint.host, endpoint.port, tls = true))
-      }
-    val owner =
-      GatewayIngressController(
-        scope,
-        registry,
-        CloudflareAccessSessionStore.Persistence(
-          load = { stored.get() },
-          save = { _, value ->
-            stored.set(value)
-            true
-          },
-          delete = {
-            stored.set(null)
-            true
-          },
-        ),
-        customHeaders = { mapOf("X-Existing-Ingress" to "preserved") },
-        retireTransports = { sessions.toList().forEach { it.disconnectAndJoin() } },
-        clientForRoute = { _, params ->
-          val config = checkNotNull(buildGatewayTlsConfig(params))
-          val transport =
-            OkHttpClient
-              .Builder()
-              .sslSocketFactory(config.sslSocketFactory, config.trustManager)
-              .hostnameVerifier(config.hostnameVerifier)
-              .followRedirects(false)
-              .followSslRedirects(false)
-              .cookieJar(CookieJar.NO_COOKIES)
-              .cache(null)
-              .build()
-          CloudflareAccessClient { request, maximumBytes, timeout ->
-            // Only the external issuer is synthetic; Gateway probes use the real pinned TLS transport.
-            if (request.url.host == application.issuer.host) {
-              CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), CloudflareAccessTestTokens.jwks)
-            } else {
-              CloudflareAccessClient.send(request, maximumBytes, timeout, transport)
-            }
-          }
-        },
-        authenticate = { _, _ -> nextSession },
-      )
+    val prefs = SecurePrefs(app, app.getSharedPreferences("access-wire-${UUID.randomUUID()}", Context.MODE_PRIVATE))
+    val runtime = NodeRuntime(app, prefs)
+    private val startupJobs =
+      ReflectionHelpers
+        .getField<CoroutineScope>(runtime, "scope")
+        .coroutineContext.job.children
+        .toList()
+    val owner = ReflectionHelpers.getField<Lazy<GatewayIngressController>>(runtime, "gatewayIngress\$delegate").value
+    val node = ReflectionHelpers.getField<GatewaySession>(runtime, "nodeSession")
+    val operator = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+    private val store = ReflectionHelpers.getField<CloudflareAccessSessionStore>(owner, "store")
+    private val persistence = CloudflareAccessSessionStore.Persistence.securePrefs(prefs)
 
     init {
       server.dispatcher =
         object : Dispatcher() {
           override fun dispatch(request: RecordedRequest): MockResponse {
             requests.add(request)
-            if (request.getHeader("Upgrade").equals("websocket", true)) return upgrade()
             if (request.method == "HEAD") return MockResponse().setHeader("Cf-Access-Metadata", CloudflareAccessTestTokens.metadata("127.0.0.1"))
-            if (request.path == MEDIA_PATH) {
+            val ordinaryRequest = request.path.orEmpty().startsWith(ordinary.contextPath)
+            val accepted =
+              request.getHeader("Cf-Access-Token") == acceptedToken.get() ||
+                (ordinaryRequest && request.getHeader("X-Existing-Ingress") == "preserved" && request.getHeader("Cf-Access-Token") == null)
+            if (request.getHeader("Upgrade").equals("websocket", true) && accepted) return upgrade(request)
+            if (request.path.orEmpty().contains(MEDIA_PATH) && accepted) {
               redirect.get()?.let { return MockResponse().setResponseCode(302).setHeader("Location", it) }
               return MockResponse().setHeader("Content-Type", "image/png").setBody(okio.Buffer().write(byteArrayOf(1, 2, 3))).apply {
-                if (holdMedia.get()) throttleBody(1, 1, TimeUnit.DAYS)
+                if (holdMedia.get() && !ordinaryRequest) throttleBody(1, 1, TimeUnit.DAYS)
               }
             }
             val response =
-              if (request.getHeader("Cf-Access-Token") == acceptedToken.get()) {
+              if (accepted) {
                 MockResponse()
               } else {
                 MockResponse()
@@ -277,7 +303,7 @@ class GatewayIngressWireTest {
                   .setHeader("WWW-Authenticate", "Cloudflare-Access resource_metadata=\"${application.origin.uri}/.well-known/cloudflare-access-protected-resource/\"")
               }
             // Capture the old successful verdict before a replacement changes server credentials.
-            if (holdProbe.get() && request.getHeader("Cf-Access-Token") != null) {
+            if (request.path == primary.contextPath && request.getHeader("Cf-Access-Token") != null && holdProbe.compareAndSet(true, false)) {
               probeStarted.complete(Unit)
               if (!releaseProbe.await(WIRE_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
                 probeExpired.set(true)
@@ -294,12 +320,15 @@ class GatewayIngressWireTest {
       return CloudflareAccessSession(application, subject, expires, CloudflareAccessTestTokens.token(CloudflareAccessTestTokens.claims(subject, expires)))
     }
 
-    fun replaceAccount() {
+    suspend fun replaceAccount() {
       nextSession = newSession("wire-replacement")
       acceptedToken.set(checkNotNull(nextSession.authorizationHeader(url("/"))))
+      store.signIn(application) {}.await()
     }
 
     fun url(path: String): String = "https://127.0.0.1:${server.port}$path"
+
+    fun persistedGrant(): String? = persistence.load(origin)
 
     suspend fun <T> bounded(operation: suspend () -> T): T {
       val task = scope.async(Dispatchers.IO) { operation() }
@@ -310,51 +339,168 @@ class GatewayIngressWireTest {
       }
     }
 
-    suspend fun prepare(userInitiated: Boolean = false) =
-      bounded {
-        assertNotNull(owner.prepare(endpoint, tls, userInitiated, owner.admissionCheckpoint()) { true })
+    suspend fun prepare() {
+      // Isolate constructor discovery/fleet producers before seeding. Real runtime/session owners stay live.
+      startupJobs.forEach { it.cancel() }
+      withTimeout(WIRE_TIMEOUT_MS) { startupJobs.joinAll() }
+      val clientForRoute: (GatewayEndpoint, GatewayTlsParams) -> CloudflareAccessClient = { _, params ->
+        val config = checkNotNull(buildGatewayTlsConfig(params))
+        val transport =
+          OkHttpClient
+            .Builder()
+            .sslSocketFactory(config.sslSocketFactory, config.trustManager)
+            .hostnameVerifier(config.hostnameVerifier)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .cookieJar(CookieJar.NO_COOKIES)
+            .cache(null)
+            .build()
+        CloudflareAccessClient { request, maximumBytes, timeout ->
+          // Only issuer discovery is synthetic. Gateway probes use the production pinned TLS send path.
+          if (request.url.host == application.issuer.host) {
+            CloudflareAccessClient.Reply(request.url.toString(), 200, Headers.Builder().build(), CloudflareAccessTestTokens.jwks)
+          } else {
+            CloudflareAccessClient.send(request, maximumBytes, timeout, transport)
+          }
+        }
       }
-
-    fun connect(role: String): Triple<GatewaySession, CompletableDeferred<Unit>, CompletableDeferred<Unit>> {
-      val connected = CompletableDeferred<Unit>()
-      val offline = CompletableDeferred<Unit>()
-      val session =
-        GatewaySession(
-          scope = scope,
-          identityStore = testDeviceIdentityStore(app),
-          deviceAuthStore = DeviceAuthStore(prefs),
-          onConnected = { connected.complete(Unit) },
-          onDisconnected = { if (it == "Offline") offline.complete(Unit) },
-          onEvent = { _, _ -> },
-          customHeadersProvider = { mapOf("X-Existing-Ingress" to "preserved") },
-          ingressAuthorizationProvider = owner::authorization,
+      val authenticate: suspend (CloudflareAccessApplication, suspend (String) -> Unit) -> CloudflareAccessSession = { _, _ -> nextSession }
+      ReflectionHelpers.setField(owner, "clientForRoute", clientForRoute)
+      ReflectionHelpers.setField(store, "authenticate", authenticate)
+      assertTrue(persistence.save(origin, nextSession.encode()))
+      for (endpoint in listOf(primary, managed, ordinary)) {
+        prefs.gatewayRegistry.upsert(
+          GatewayRegistryEntry(endpoint.stableId, GatewayRegistryEntryKind.MANUAL, "Wire fixture", endpoint.host, endpoint.port, tls = true, contextPath = endpoint.contextPath),
         )
-      sessions.add(session)
-      session.connect(
-        endpoint,
-        "gateway-pairing-token",
-        null,
-        null,
-        GatewayConnectOptions(
-          role,
-          emptyList(),
-          emptyList(),
-          emptyList(),
-          emptyMap(),
-          GatewayClientInfo("openclaw-android-test", "Wire fixture", "test", "android", "node", "test", "android", "test"),
-        ),
-        tls,
-      )
-      return Triple(session, connected, offline)
+        prefs.saveGatewayTlsFingerprint(endpoint.stableId, identity.fingerprint)
+        prefs.saveGatewayCredentials(endpoint.stableId, token = "gateway-pairing-token")
+        prefs.saveGatewayCustomHeaders(endpoint.stableId, mapOf("X-Existing-Ingress" to "preserved"))
+      }
+      connectPrimary()
     }
 
-    suspend fun load(session: GatewaySession): GatewayLoadedMedia.Buffered? =
+    suspend fun connectPrimary() {
+      runtime.connect(primary, NodeRuntime.GatewayConnectAuth("gateway-pairing-token", null, null))
+      waitUntil { node.isReady() && operator.isReady() && prefs.gatewayRegistry.activeStableId.value == primary.stableId }
+    }
+
+    suspend fun connectFleet() {
+      runtime.setGatewayConnectionEnabled(managed.stableId, true)
+      runtime.setGatewayConnectionEnabled(ordinary.stableId, true)
       bounded {
-        session.loadMediaArtifact(endpoint.stableId, "main", null, "wire-artifact", GatewayMediaKind.Image) as? GatewayLoadedMedia.Buffered
+        kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn<Any?> { continuation ->
+          NodeRuntime::class.java
+            .getDeclaredMethod("reconcileBackgroundGatewayFleet", java.lang.Long.TYPE, kotlin.coroutines.Continuation::class.java)
+            .apply { isAccessible = true }
+            .invoke(runtime, owner.admissionCheckpoint(), continuation)
+        }
+      }
+      waitUntil { secondary(managed).isReady() && secondary(ordinary).isReady() }
+      val active = checkNotNull(ReflectionHelpers.getField<Any?>(runtime, "activeGatewayConnection"))
+      val fleet = ReflectionHelpers.getField<Map<String, Any>>(runtime, "secondaryOperatorSessions")
+      assertEquals(origin, ReflectionHelpers.getField<CloudflareAccessOrigin?>(active, "ingressOrigin"))
+      assertEquals(origin, ReflectionHelpers.getField<CloudflareAccessOrigin?>(checkNotNull(fleet[managed.stableId]), "ingressOrigin"))
+      assertNull(ReflectionHelpers.getField<CloudflareAccessOrigin?>(checkNotNull(fleet[ordinary.stableId]), "ingressOrigin"))
+    }
+
+    fun secondary(endpoint: GatewayEndpoint): GatewaySession {
+      val fleet = ReflectionHelpers.getField<Map<String, Any>>(runtime, "secondaryOperatorSessions")
+      return ReflectionHelpers.getField(checkNotNull(fleet[endpoint.stableId]), "session")
+    }
+
+    suspend fun load(
+      session: GatewaySession,
+      endpoint: GatewayEndpoint,
+    ): GatewayLoadedMedia.Buffered? = bounded { session.loadMediaArtifact(endpoint.stableId, "main", null, "wire-artifact", GatewayMediaKind.Image) as? GatewayLoadedMedia.Buffered }
+
+    suspend fun holdRead(
+      capability: GatewayLoadedMedia.Buffered,
+      endpoint: GatewayEndpoint,
+    ): HeldRead {
+      val request =
+        Request
+          .Builder()
+          .url(url(endpoint.contextPath + MEDIA_PATH))
+          .apply {
+            capability.headers.forEach { (name, value) -> header(name, value) }
+          }.build()
+      val call = capability.client.newCall(request)
+      calls.add(call)
+      val response = bounded { call.execute() }
+      responses.add(response)
+      assertEquals(
+        1,
+        bounded {
+          response.body
+            .source()
+            .readByte()
+            .toInt()
+        },
+      )
+      val reading = CompletableDeferred<Unit>()
+      val pending =
+        scope.async(Dispatchers.IO) {
+          reading.complete(Unit)
+          runCatching { response.body.source().readByte() }
+        }
+      withTimeout(WIRE_TIMEOUT_MS) { reading.await() }
+      return HeldRead(capability, request, call, pending)
+    }
+
+    suspend fun assertRetired(
+      sessions: List<GatewaySession>,
+      retiredPeers: List<Peer>,
+      reads: List<HeldRead>,
+    ) {
+      reads.forEach { assertTrue(it.call.isCanceled()) }
+      sessions.forEach { assertFalse(it.isReady()) }
+      withTimeout(WIRE_TIMEOUT_MS) {
+        retiredPeers.forEach { it.closed.await() }
+        reads.forEach { assertTrue(it.pending.await().exceptionOrNull() is IOException) }
+      }
+    }
+
+    fun assertPairing(endpoint: GatewayEndpoint) {
+      assertEquals("gateway-pairing-token", prefs.loadGatewayCredentials(endpoint.stableId).token)
+      assertEquals(mapOf("X-Existing-Ingress" to "preserved"), prefs.loadGatewayCustomHeaders(endpoint.stableId))
+    }
+
+    suspend fun assertOrdinaryWorks(session: GatewaySession) {
+      assertTrue(session.isReady())
+      assertArrayEquals(byteArrayOf(1, 2, 3), checkNotNull(load(session, ordinary)).bytes)
+      assertPairing(ordinary)
+      requests.filter { it.path.orEmpty().startsWith(ordinary.contextPath) }.forEach {
+        assertNotNull(it.handshake)
+        assertNull(it.getHeader("Cf-Access-Token"))
+        assertEquals("preserved", it.getHeader("X-Existing-Ingress"))
+      }
+    }
+
+    suspend fun assertLateDenied(read: HeldRead) {
+      val before = requests.size
+      val late =
+        read.capability.client.newCall(
+          read.request
+            .newBuilder()
+            .header("Range", "bytes=1-")
+            .build(),
+        )
+      calls.add(late)
+      assertTrue(runCatching { bounded { late.execute().close() } }.exceptionOrNull() is GatewayExternalAuthorizationException)
+      assertEquals(before, requests.size)
+    }
+
+    fun oldUpgrades(token: String): Int = requests.count { it.getHeader("Upgrade") == "websocket" && it.getHeader("Cf-Access-Token") == token }
+
+    private suspend fun waitUntil(predicate: () -> Boolean) =
+      withTimeout(WIRE_TIMEOUT_MS) {
+        while (!predicate()) delay(1)
       }
 
-    private fun upgrade() =
-      MockResponse().withWebSocketUpgrade(
+    private fun upgrade(request: RecordedRequest): MockResponse {
+      val peer = Peer(request.path, request.getHeader("Cf-Access-Token"))
+      peers.add(peer)
+      return MockResponse().withWebSocketUpgrade(
         object : WebSocketListener() {
           override fun onOpen(
             webSocket: WebSocket,
@@ -373,29 +519,65 @@ class GatewayIngressWireTest {
             val payload =
               if (method == "connect") {
                 val params = frame["params"]!!.jsonObject
-                roles.add(params["role"]!!.jsonPrimitive.content)
+                peer.role = params["role"]!!.jsonPrimitive.content
                 gatewayTokens.add(params["auth"]!!.jsonObject["token"]!!.jsonPrimitive.content)
                 """{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}"""
-              } else {
+              } else if (method == "artifacts.download") {
                 """{"artifact":{"type":"image","mimeType":"image/png"},"url":"$MEDIA_PATH"}"""
+              } else if (method == "sessions.list") {
+                """{"sessions":[]}"""
+              } else if (method == "agents.list") {
+                """{"defaultId":"main","agents":[]}"""
+              } else {
+                "{}"
               }
             webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
           }
+
+          override fun onClosed(
+            webSocket: WebSocket,
+            code: Int,
+            reason: String,
+          ) {
+            peer.closed.complete(Unit)
+          }
+
+          override fun onFailure(
+            webSocket: WebSocket,
+            error: Throwable,
+            response: Response?,
+          ) {
+            peer.closed.complete(Unit)
+          }
         },
       )
+    }
 
-    suspend fun close() {
+    fun close() {
+      val failures = mutableListOf<Throwable>()
       holdProbe.set(false)
       releaseProbe.countDown()
       calls.forEach { it.cancel() }
-      sessions.forEach { it.disconnect() }
+      responses.forEach { runCatching { it.close() }.exceptionOrNull()?.let(failures::add) }
       try {
-        // Closing physical I/O also releases operations that ignore coroutine cancellation.
-        bounded { server.shutdown() }
+        drainWithMainLooper {
+          bounded { server.shutdown() }
+          val sessions =
+            listOf(node, operator) +
+              ReflectionHelpers.getField<Map<String, Any>>(runtime, "secondaryOperatorSessions").values.map {
+                ReflectionHelpers.getField<GatewaySession>(it, "session")
+              }
+          runtime.disconnect()
+          withTimeout(WIRE_TIMEOUT_MS) { sessions.forEach { it.disconnectAndJoin() } }
+        }
+      } catch (error: Throwable) {
+        failures.add(error)
       } finally {
-        withTimeout(WIRE_TIMEOUT_MS) { scope.coroutineContext.job.cancelAndJoin() }
+        runCatching { closeNodeRuntimeTestFixture(runtime) }.exceptionOrNull()?.let(failures::add)
+        runCatching { drainWithMainLooper { withTimeout(WIRE_TIMEOUT_MS) { scope.coroutineContext.job.cancelAndJoin() } } }.exceptionOrNull()?.let(failures::add)
       }
-      assertFalse("Held probe expired instead of being released by the test", probeExpired.get())
+      if (probeExpired.get()) failures.add(AssertionError("Held probe expired instead of being released by the test"))
+      MultipleFailureException.assertEmpty(failures)
     }
   }
 }
