@@ -160,7 +160,9 @@ function createClientFactory(
                 turnId: "turn-finalizer",
                 error: {
                   message: options.errorBeforeCompletion.message,
-                  codexErrorInfo: options.errorBeforeCompletion.codexErrorInfo,
+                  ...(options.errorBeforeCompletion.codexErrorInfo !== undefined
+                    ? { codexErrorInfo: options.errorBeforeCompletion.codexErrorInfo }
+                    : {}),
                 },
                 willRetry: options.errorBeforeCompletion.willRetry,
               },
