@@ -168,6 +168,15 @@ describe("lazy protocol validators", () => {
     expectRejected(validateSessionsListParams, [{ archived: "archived" }, { involvingMe: "yes" }]);
   });
 
+  it("validates the sessions.list activity ordering request", () => {
+    expectAccepted(validateSessionsListParams, [
+      { sortBy: "updatedAt" },
+      { sortBy: "lastInteractionAt" },
+      { sortBy: "activity", activeMinutes: 1_440, limit: 100 },
+    ]);
+    expectRejected(validateSessionsListParams, [{ sortBy: "recent" }]);
+  });
+
   it("validates session board face list and patch values", () => {
     expectAccepted(validateSessionsListParams, [
       { boardFace: "dashboard" },

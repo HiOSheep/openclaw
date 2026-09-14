@@ -1463,6 +1463,7 @@ public struct ArtifactSummary: Codable, Sendable {
     public let taskid: String?
     public let messageseq: Int?
     public let source: String?
+    public let image: [String: AnyCodable]?
     public let download: [String: AnyCodable]
 
     public init(
@@ -1476,6 +1477,7 @@ public struct ArtifactSummary: Codable, Sendable {
         taskid: String? = nil,
         messageseq: Int? = nil,
         source: String? = nil,
+        image: [String: AnyCodable]? = nil,
         download: [String: AnyCodable])
     {
         self.id = id
@@ -1488,6 +1490,7 @@ public struct ArtifactSummary: Codable, Sendable {
         self.taskid = taskid
         self.messageseq = messageseq
         self.source = source
+        self.image = image
         self.download = download
     }
 
@@ -1502,6 +1505,7 @@ public struct ArtifactSummary: Codable, Sendable {
         case taskid = "taskId"
         case messageseq = "messageSeq"
         case source
+        case image
         case download
     }
 }
@@ -1620,19 +1624,28 @@ public struct ArtifactsListParams: Codable, Sendable {
     public let taskid: String?
     public let agentid: String?
     public let messagerole: String?
+    public let type: String?
+    public let limit: Int?
+    public let cursor: String?
 
     public init(
         sessionkey: String? = nil,
         runid: String? = nil,
         taskid: String? = nil,
         agentid: String? = nil,
-        messagerole: String? = nil)
+        messagerole: String? = nil,
+        type: String? = nil,
+        limit: Int? = nil,
+        cursor: String? = nil)
     {
         self.sessionkey = sessionkey
         self.runid = runid
         self.taskid = taskid
         self.agentid = agentid
         self.messagerole = messagerole
+        self.type = type
+        self.limit = limit
+        self.cursor = cursor
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1641,16 +1654,31 @@ public struct ArtifactsListParams: Codable, Sendable {
         case taskid = "taskId"
         case agentid = "agentId"
         case messagerole = "messageRole"
+        case type
+        case limit
+        case cursor
     }
 }
 
 public struct ArtifactsListResult: Codable, Sendable {
     public let artifacts: [ArtifactSummary]
+    public let nextcursor: String?
+    public let omittedoversized: Bool?
 
     public init(
-        artifacts: [ArtifactSummary])
+        artifacts: [ArtifactSummary],
+        nextcursor: String? = nil,
+        omittedoversized: Bool? = nil)
     {
         self.artifacts = artifacts
+        self.nextcursor = nextcursor
+        self.omittedoversized = omittedoversized
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case artifacts
+        case nextcursor = "nextCursor"
+        case omittedoversized = "omittedOversized"
     }
 }
 
