@@ -294,7 +294,9 @@ proof = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(proof)
 app = pathlib.Path("apps/android/app/build/outputs/apk/play/debug/app.apk")
 test = pathlib.Path("apps/android/app/build/outputs/apk/androidTest/play/debug/test.apk")
-for apk, variant, package in [(app, "playDebug", proof.APP), (test, "playDebugAndroidTest", proof.APP + ".test")]:
+for apk, variant, package in [(app, "playDebug", "ai.openclaw.app.debug"), (test, "playDebugAndroidTest", "ai.openclaw.app.debug.test")]:
+    if mode == "namespace-package" and apk == app: package = "ai.openclaw.app"
+    if mode == "wrong-test-package" and apk == test: package = "ai.openclaw.app.test"
     apk.parent.mkdir(parents=True)
     apk.write_bytes(b"unchanged test fixture apk" + package.encode())
     element = {"outputFile": "../outside.apk" if mode == "outside-apk" else apk.name, "filters": []}
@@ -307,7 +309,7 @@ def run(args, check=True, timeout=30):
     output, status, stderr = "", 0, ""
     if args[0] == "git": output = "a" * 40
     elif "instrumentation" in args:
-        output = "" if mode == "missing-target" else f"instrumentation:{proof.APP}.test/androidx.test.runner.AndroidJUnitRunner (target={proof.APP})\n"
+        output = "" if mode == "missing-target" else "instrumentation:ai.openclaw.app.debug.test/androidx.test.runner.AndroidJUnitRunner (target=ai.openclaw.app.debug)\n"
     elif "pidof" in args:
         output, status = ("1234", 0) if mode == "seed-live" else ("", 1)
     elif "instrument" in args:
@@ -315,7 +317,7 @@ def run(args, check=True, timeout=30):
         method = args[args.index("class") + 1].split("#")[1]
         receipt = {"nonce": args[args.index("restartNonce") + 1], "source": args[args.index("restartSource") + 1],
                    "pid": 1234 if phase == "seed" or mode == "same-pid" else 2345, "uid": 10123,
-                   "package": proof.APP, "process": proof.APP, "apk": hashlib.sha256(app.read_bytes()).hexdigest(),
+                   "package": "ai.openclaw.app.debug", "process": "ai.openclaw.app.debug", "apk": hashlib.sha256(app.read_bytes()).hexdigest(),
                    "signer": "b" * 64, "storage": "c" * 64, "instance": "d" * 64, "phase": phase,
                    "bootstrapExpiresAtMs": 1800000000000}
         if phase == "verify": receipt["seedPid"] = 1234
@@ -328,7 +330,8 @@ def run(args, check=True, timeout=30):
         if phase == "verify" and mode in ("changed-storage", "changed-signer"):
             receipt[mode.removeprefix("changed-")] = "e" * 64
         test_name = "anotherMethod" if mode == "wrong-case" else method
-        fields = f"INSTRUMENTATION_STATUS: class={proof.TEST_CLASS}\nINSTRUMENTATION_STATUS: test={test_name}\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: current=1\n"
+        test_class = "ai.openclaw.app.debug.gateway.CloudflareAccessRestartNativeTest" if mode == "wrong-test-class" else "ai.openclaw.app.gateway.CloudflareAccessRestartNativeTest"
+        fields = f"INSTRUMENTATION_STATUS: class={test_class}\nINSTRUMENTATION_STATUS: test={test_name}\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: current=1\n"
         codes = [] if mode == "empty" else [1, -3 if mode == "skipped" else -4 if mode == "assumption" else -2 if mode == "failed" else 0]
         if mode == "duplicate": codes += [1, 0]
         output = "".join(fields + f"INSTRUMENTATION_STATUS_CODE: {code}\n" for code in codes)
@@ -373,6 +376,9 @@ describe("Android Access process restart proof", () => {
       "ai.openclaw.app.gateway.CloudflareAccessRestartNativeTest#verifyAcknowledgedSignOut",
     ]);
     for (const invocation of invocations) {
+      expect(invocation.at(-1)).toBe(
+        "ai.openclaw.app.debug.test/androidx.test.runner.AndroidJUnitRunner",
+      );
       expect(invocation.slice(0, 7)).toEqual([
         "/usr/bin/timeout",
         "--signal=TERM",
@@ -399,7 +405,7 @@ describe("Android Access process restart proof", () => {
       "emulator-5554",
       "shell",
       "pidof",
-      "ai.openclaw.app",
+      "ai.openclaw.app.debug",
     ]);
     for (const phase of ["seed", "verify"]) {
       expect(files[`restart-${phase}.status`]).toBe("0\n");
@@ -423,6 +429,7 @@ describe("Android Access process restart proof", () => {
     "failed",
     "duplicate",
     "wrong-case",
+    "wrong-test-class",
     "missing-receipt",
     "wrong-source",
     "seed-live",
@@ -435,6 +442,8 @@ describe("Android Access process restart proof", () => {
     "deadline-zero",
     "changed-deadline",
     "missing-target",
+    "namespace-package",
+    "wrong-test-package",
     "outside-apk",
     "ambiguous-apk",
     "host-timeout",
@@ -447,7 +456,13 @@ describe("Android Access process restart proof", () => {
       mode,
     )
       ? 2
-      : ["missing-target", "outside-apk", "ambiguous-apk"].includes(mode)
+      : [
+            "missing-target",
+            "namespace-package",
+            "wrong-test-package",
+            "outside-apk",
+            "ambiguous-apk",
+          ].includes(mode)
         ? 0
         : 1;
     expect(commands.filter((args) => args.includes("instrument"))).toHaveLength(expected);

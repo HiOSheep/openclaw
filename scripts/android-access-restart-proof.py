@@ -11,8 +11,8 @@ import time
 import uuid
 
 
-APP = "ai.openclaw.app"
-TEST_CLASS = APP + ".gateway.CloudflareAccessRestartNativeTest"
+APP = "ai.openclaw.app.debug"
+TEST_CLASS = "ai.openclaw.app.gateway.CloudflareAccessRestartNativeTest"
 ADB = ["adb", "-s", "emulator-5554"]
 
 
