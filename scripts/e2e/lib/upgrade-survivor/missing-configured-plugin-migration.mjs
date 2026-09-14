@@ -227,13 +227,15 @@ async function serve([portFile, npmUpstream, clawhubUpstream]) {
   let available = false;
   write(requestPath, "");
   async function proxy(upstream, label) {
+    const upstreamUrl = new URL(upstream);
     const server = http.createServer((request, response) => {
       if (request.method === "POST" && request.url === "/__fixture__/available") {
         available = true;
         response.end("available");
         return;
       }
-      const decoded = decodeURIComponent(new URL(request.url, "http://fixture").pathname);
+      const requestUrl = new URL(request.url, "http://fixture");
+      const decoded = decodeURIComponent(requestUrl.pathname);
       const codex = /\/@openclaw\/codex(?:\/|$)/u.test(decoded);
       const blocked = codex && !available;
       fs.appendFileSync(
@@ -246,8 +248,11 @@ async function serve([portFile, npmUpstream, clawhubUpstream]) {
         return;
       }
       const relay = http.request(
-        new URL(request.url, upstream),
         {
+          protocol: upstreamUrl.protocol,
+          hostname: upstreamUrl.hostname,
+          port: upstreamUrl.port,
+          path: `${requestUrl.pathname}${requestUrl.search}`,
           method: request.method,
           // Keep package download URLs on this proxy while the upstream serves its bytes.
           headers: request.headers,
