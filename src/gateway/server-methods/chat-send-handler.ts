@@ -24,7 +24,6 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
-import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
@@ -275,11 +274,12 @@ async function handleChatSendWithOptions(
     });
     if (
       entry?.sessionId &&
-      isOperatorUiClient(clientInfo) &&
+      userTurn.baseInput.display !== false &&
+      (!systemInputProvenance || systemInputProvenance.kind === "external_user") &&
       !isInternalTextSlashCommandTurn &&
       !normalizedRequest.value.goalOperation
     ) {
-      // ACK transfers browser custody. Persist approved source bytes before
+      // ACK transfers input custody. Persist approved source bytes before
       // either a direct runtime or the in-memory collector can accept them.
       pendingStageAttempted = true;
       const assertCustodyCurrent = () => {
@@ -326,11 +326,12 @@ async function handleChatSendWithOptions(
           joinWith: "\n",
           normalizeText: (value) => value,
         }) ?? "";
-      ctx.Body = ctx.BodyForAgent = ctx.RawBody = text;
-      ctx.BodyForCommands = ctx.CommandBody = text;
-      if (ctx.CommandTurn) {
-        ctx.CommandTurn = { ...ctx.CommandTurn, body: text };
-      }
+      preparedUserTurn.applyApprovedText(text);
+      emitSessionsChanged(
+        context,
+        { sessionKey, agentId: selectedAgent.agentId, reason: "send" },
+        { accessChanged: false },
+      );
     }
     let goalResult: SessionGoalOperationResult | undefined;
     if (restartSafeAdmission) {

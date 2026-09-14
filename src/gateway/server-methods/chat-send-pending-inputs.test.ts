@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
+import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -38,7 +39,7 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
-describe("ordinary browser input admission", () => {
+describe("ordinary chat input admission", () => {
   async function createMentionFixture(
     options: { active?: boolean; preserveContent?: boolean } = {},
   ) {
@@ -213,54 +214,108 @@ describe("ordinary browser input admission", () => {
     }
   });
 
-  it("durably stages the approved cloud follow-up before ACK without changing the active transcript", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    const clone = vi.spyOn(globalThis, "structuredClone");
-    const { scope, params, approvedContent, activeTranscript } = fixture;
-    let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
-    let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
-    const respond = vi.fn<RespondFn>((ok) => {
-      if (ok) {
-        transcriptAtAck = loadTranscriptEventsSync(scope);
-        pendingAtAck = listSessionPendingInputs(scope);
-      }
-    });
-    try {
-      expect(replyRunRegistry.isActive(scope.sessionKey)).toBe(true);
-      expect(
-        replyRunRegistry.resolveCurrentMessageInjectionTarget(scope.sessionKey),
-      ).toBeUndefined();
-      await fixture.send(respond);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ runId: params.idempotencyKey, status: "started" }),
-        undefined,
-        expect.anything(),
-      );
-      expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
-      expect(transcriptAtAck).toEqual(activeTranscript);
-      expect(pendingAtAck).toMatchObject({
-        total: 1,
-        items: [
-          {
-            state: "queued",
-            runId: params.idempotencyKey,
-            message: {
-              role: "user",
-              content: approvedContent,
-              idempotencyKey: `${params.idempotencyKey}:user`,
-            },
-          },
-        ],
+  it.each([
+    { id: "openclaw-control-ui", mode: "webchat", displayName: "Web" },
+    { id: "cli", mode: "cli", displayName: "CLI" },
+    { id: "openclaw-macos", mode: "ui", displayName: "macOS" },
+    { id: "gateway-client", mode: "backend", displayName: "Automation" },
+  ] satisfies Array<Pick<GatewayClientInfo, "id" | "mode" | "displayName">>)(
+    "stages the approved $id follow-up and its source before ACK without changing the active transcript",
+    async (clientInfo) => {
+      const fixture = await createBrowserFollowupFixture();
+      fixture.client.connect.client = { ...fixture.client.connect.client, ...clientInfo };
+      fixture.params.queueMode = "followup";
+      const profile = ensureProfileForEmail("alice@example.test");
+      fixture.client.authenticatedUserProfile = {
+        profileId: profile.id,
+        displayName: "Alice",
+        hasAvatar: false,
+        updatedAt: 1,
+      };
+      const clone = vi.spyOn(globalThis, "structuredClone");
+      const { scope, params, approvedContent, activeTranscript } = fixture;
+      let transcriptAtAck: ReturnType<typeof loadTranscriptEventsSync> | undefined;
+      let pendingAtAck: ReturnType<typeof listSessionPendingInputs> | undefined;
+      let pendingAtNotification: ReturnType<typeof listSessionPendingInputs> | undefined;
+      fixture.context.getSessionEventSubscriberConnIds = () => new Set(["observer"]);
+      vi.spyOn(fixture.context, "broadcastToConnIds").mockImplementation((event, payload) => {
+        if (event === "sessions.changed" && isRecord(payload) && payload.reason === "send") {
+          pendingAtNotification = listSessionPendingInputs(scope);
+        }
       });
-      // Initial resolution detaches the store; custody needs only the current target binding.
-      expect(
-        clone.mock.calls.filter(
-          ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
-        ).length,
-      ).toBeLessThanOrEqual(1);
+      const respond = vi.fn<RespondFn>((ok) => {
+        if (ok) {
+          transcriptAtAck = loadTranscriptEventsSync(scope);
+          pendingAtAck = listSessionPendingInputs(scope);
+        }
+      });
+      try {
+        expect(replyRunRegistry.isActive(scope.sessionKey)).toBe(true);
+        expect(
+          replyRunRegistry.resolveCurrentMessageInjectionTarget(scope.sessionKey),
+        ).toBeUndefined();
+        await fixture.send(respond);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ runId: params.idempotencyKey, status: "started" }),
+          undefined,
+          expect.anything(),
+        );
+        expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
+        expect(transcriptAtAck).toEqual(activeTranscript);
+        expect(pendingAtAck).toMatchObject({
+          total: 1,
+          items: [
+            {
+              state: "queued",
+              runId: params.idempotencyKey,
+              message: {
+                role: "user",
+                content: approvedContent,
+                idempotencyKey: `${params.idempotencyKey}:user`,
+                __openclaw: {
+                  senderId: profile.id,
+                  senderIdentity: { type: "profile", id: profile.id },
+                  transport: { clients: [clientInfo] },
+                },
+              },
+            },
+          ],
+        });
+        expect(pendingAtNotification).toEqual(pendingAtAck);
+        const recorder = await fixture.dispatchedRecorder;
+        const committed = await recorder.persistApproved();
+        expect(committed?.message["__openclaw"]).toMatchObject({
+          senderIdentity: { type: "profile", id: profile.id },
+          transport: { clients: [clientInfo] },
+        });
+        // Initial resolution detaches the store; custody needs only the current target binding.
+        expect(
+          clone.mock.calls.filter(
+            ([entry]) => isRecord(entry) && entry.sessionId === "unrelated-browser-session",
+          ).length,
+        ).toBeLessThanOrEqual(1);
+      } finally {
+        clone.mockRestore();
+        await fixture.cleanup();
+      }
+    },
+  );
+
+  it("keeps internal system inputs outside ordinary pending-message custody", async () => {
+    const fixture = await createBrowserFollowupFixture();
+    fixture.client.connect.client = { id: "cli", mode: "cli", version: "test", platform: "test" };
+    fixture.params.systemInputProvenance = {
+      kind: "internal_system",
+      sourceTool: "system_fixture",
+    };
+    try {
+      const ack = await fixture.send();
+      expect(ack.mock.calls[0]?.[0]).toBe(true);
+      expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      const recorder = await fixture.dispatchedRecorder;
+      expect((await recorder.resolveMessage())?.["__openclaw"]?.transport).toBeUndefined();
     } finally {
-      clone.mockRestore();
       await fixture.cleanup();
     }
   });

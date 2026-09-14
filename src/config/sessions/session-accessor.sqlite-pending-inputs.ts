@@ -375,16 +375,18 @@ export function resolveSessionPendingInputAppend(
   const idempotencyKey = record.idempotencyKey.trim();
   const row = readSessionPendingInputByKey(database, scope, idempotencyKey);
   const owner = owners.current.getStore();
-  const ownsInput = owner?.idempotencyKey === idempotencyKey;
+  // A bound-session mirror shares source correlation, never its pending custody.
+  const ownsInput =
+    owner?.idempotencyKey === idempotencyKey &&
+    owner.databasePath === database.path &&
+    owner.sessionId === scope.sessionId &&
+    owner.sessionKey === scope.sessionKey;
   if (!row && !ownsInput) {
     return undefined;
   }
   if (
     !owner ||
     !ownsInput ||
-    owner.databasePath !== database.path ||
-    owner.sessionId !== scope.sessionId ||
-    owner.sessionKey !== scope.sessionKey ||
     (row &&
       (row.input_id !== owner.inputId ||
         row.consumed_event_id != null ||

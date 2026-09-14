@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { sql } from "kysely";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
+import {
+  normalizeMessageClientSources,
+  readMessageClientSources,
+} from "../../chat/message-client-source.js";
 import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -130,8 +135,18 @@ export function bindSessionPendingInputSources(
   }
   // Collected framing still passes storage redaction; its staged sources have
   // already passed approval and must not run through another plugin hook.
+  const clients = normalizeMessageClientSources(
+    receipts.flatMap((receipt) => readMessageClientSources(receipt.message)),
+  );
+  const collectedMessage = { ...message };
+  if (clients.length) {
+    collectedMessage["__openclaw"] = {
+      ...message["__openclaw"],
+      transport: { ...asOptionalRecord(message["__openclaw"]?.transport), clients },
+    };
+  }
   const messageJson = JSON.stringify(
-    redactTranscriptMessageForStorage(message, { config: sources.at(-1)?.config }),
+    redactTranscriptMessageForStorage(collectedMessage, { config: sources.at(-1)?.config }),
   );
   if (Buffer.byteLength(messageJson, "utf8") > MAX_PAYLOAD_BYTES) {
     throw new Error("Collected input exceeds the Gateway payload limit");

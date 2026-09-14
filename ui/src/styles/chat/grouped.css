@@ -241,7 +241,9 @@
 /* Own-message footers are right-aligned, so hover-revealed time/actions must
    slot in to the LEFT of the always-visible name; otherwise the name jumps
    sideways on hover. */
-.chat-group.user:not(.chat-group--peer) .chat-group-footer--persistent-identity .chat-sender-name {
+.chat-group.user:not(.chat-group--peer)
+  .chat-group-footer--persistent-identity
+  :is(.chat-sender-name, .chat-message-source) {
   order: 1;
 }
 
@@ -284,6 +286,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.chat-message-source {
+  color: var(--muted);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .chat-send-status {
