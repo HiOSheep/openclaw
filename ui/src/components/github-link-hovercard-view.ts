@@ -1,9 +1,12 @@
 import { html, nothing, render, type TemplateResult } from "lit";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import { t } from "../i18n/index.ts";
+import { registerGitHubPreviewEnglish } from "../i18n/locales/en-github-preview.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { gitHubProfileUrl, type GitHubLinkTarget } from "./github-link-target.ts";
+
+registerGitHubPreviewEnglish();
 
 type GitHubPreviewDetails = Omit<ControlUiGitHubPreview, "createdAt" | "updatedAt" | "login"> & {
   updatedAt?: string;
