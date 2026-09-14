@@ -1,9 +1,9 @@
-// Covers disk-space formatting and warning generation.
+// Covers disk-space snapshots and formatting.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLowDiskSpaceWarning, formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
 
 function statfsFixture(params: {
   bavail: number;
@@ -43,32 +43,11 @@ describe("disk-space helpers", () => {
       expect(snapshot).toEqual({
         targetPath: path.join(tempDir, "missing", "child"),
         checkedPath: tempDir,
+        deviceId: fs.statSync(tempDir).dev,
         availableBytes: 512 * 1024,
         totalBytes: 4096 * 1024,
       });
       expect(statfs).toHaveBeenCalledWith(tempDir);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("formats low disk warnings without making them hard errors", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-disk-space-"));
-    try {
-      vi.spyOn(fs, "statfsSync").mockReturnValue(
-        statfsFixture({
-          bavail: 256,
-          bsize: 1024 * 1024,
-        }),
-      );
-
-      expect(
-        createLowDiskSpaceWarning({
-          targetPath: tempDir,
-          purpose: "test staging",
-          thresholdBytes: 512 * 1024 * 1024,
-        }),
-      ).toBe(`Low disk space near ${tempDir}: 256 MiB available; test staging may fail.`);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

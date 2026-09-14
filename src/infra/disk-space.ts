@@ -2,11 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES = 1024 * 1024 * 1024;
-
 type DiskSpaceSnapshot = {
   targetPath: string;
   checkedPath: string;
+  deviceId: number;
   availableBytes: number;
   totalBytes: number | null;
 };
@@ -16,12 +15,21 @@ function finiteNonNegativeNumber(value: unknown): number | null {
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
 }
 
-function findExistingDiskSpacePath(targetPath: string): string | null {
+function findExistingDiskSpacePath(
+  targetPath: string,
+): { checkedPath: string; deviceId: number } | null {
   let current = path.resolve(targetPath);
   while (true) {
     try {
       const stats = fs.statSync(current);
-      return stats.isDirectory() ? current : path.dirname(current);
+      if (!stats.isDirectory()) {
+        current = path.dirname(current);
+        continue;
+      }
+      return {
+        checkedPath: current,
+        deviceId: stats.dev,
+      };
     } catch {
       const parent = path.dirname(current);
       if (parent === current) {
@@ -39,12 +47,12 @@ export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
   }
   // Install/update targets may not exist yet; statfs needs the nearest existing
   // ancestor to identify the backing volume.
-  const checkedPath = findExistingDiskSpacePath(targetPath);
-  if (!checkedPath) {
+  const existing = findExistingDiskSpacePath(targetPath);
+  if (!existing) {
     return null;
   }
   try {
-    const stats = fs.statfsSync(checkedPath);
+    const stats = fs.statfsSync(existing.checkedPath);
     const blockSize = finiteNonNegativeNumber(stats.bsize);
     const availableBlocks = finiteNonNegativeNumber(stats.bavail);
     if (blockSize === null || availableBlocks === null) {
@@ -53,7 +61,7 @@ export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
     const totalBlocks = finiteNonNegativeNumber(stats.blocks);
     return {
       targetPath,
-      checkedPath,
+      ...existing,
       availableBytes: blockSize * availableBlocks,
       totalBytes: totalBlocks === null ? null : blockSize * totalBlocks,
     };
@@ -73,22 +81,4 @@ export function formatDiskSpaceBytes(bytes: number): string {
   }
   const gib = mib / 1024;
   return `${gib.toFixed(gib < 10 ? 1 : 0)} GiB`;
-}
-
-/** Builds a soft low-disk warning for setup/update flows without failing the operation. */
-export function createLowDiskSpaceWarning(params: {
-  targetPath: string;
-  purpose: string;
-  thresholdBytes?: number;
-}): string | null {
-  const thresholdBytes = params.thresholdBytes ?? LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES;
-  const snapshot = tryReadDiskSpace(params.targetPath);
-  if (!snapshot || snapshot.availableBytes >= thresholdBytes) {
-    return null;
-  }
-  const location =
-    path.resolve(snapshot.targetPath) === path.resolve(snapshot.checkedPath)
-      ? snapshot.checkedPath
-      : `${snapshot.targetPath} (volume checked at ${snapshot.checkedPath})`;
-  return `Low disk space near ${location}: ${formatDiskSpaceBytes(snapshot.availableBytes)} available; ${params.purpose} may fail.`;
 }

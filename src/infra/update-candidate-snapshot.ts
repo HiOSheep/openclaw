@@ -89,6 +89,19 @@ function measureSnapshotCapacity(
   };
 }
 
+/** Measure known SQLite families without allocating state or reading the candidate plugin inventory. */
+export async function measureInitialUpdateSnapshotCapacity(params: {
+  config: OpenClawConfig;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+}): Promise<UpdateSnapshotCapacity> {
+  const files = await collectStateDatabasePaths(params);
+  const size = await measureUpdateStateFiles(
+    [...files.values()].map(({ spellings }) => spellings[0]),
+  );
+  return measureSnapshotCapacity(params.stateDir, { ...size, pluginBytes: null }, params.env);
+}
+
 async function allocateSnapshotRoot(
   capacity: UpdateSnapshotCapacity,
   current?: { root: string; directory: string },
@@ -154,14 +167,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
   snapshotCapacity: UpdateSnapshotCapacity;
   cleanupDirectories: string[];
 }> {
-  const initialFiles = await collectStateDatabasePaths(params);
-  let size: SnapshotSize = {
-    ...(await measureUpdateStateFiles(
-      [...initialFiles.values()].map(({ spellings }) => spellings[0]),
-    )),
-    pluginBytes: null,
-  };
-  let capacity = measureSnapshotCapacity(params.stateDir, size, params.env);
+  let capacity = await measureInitialUpdateSnapshotCapacity(params);
   let directory = await allocateSnapshotRoot(capacity);
   let selectedRoot = capacity.selection!;
   const inventoryDirectory = directory;
@@ -179,7 +185,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     return await withUpdateCandidateIoBudget(
       {
         directory,
-        bytes: size.bytes + (size.pluginBytes ?? 0),
+        bytes: capacity.sqliteBytes + (capacity.pluginBytes ?? 0),
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         operation: "snapshot",
@@ -232,7 +238,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     const inventory = UpdateCandidateSnapshotInventorySchema.parse(
       await run({ mode: "inventory" }),
     );
-    size = {
+    const size: SnapshotSize = {
       ...(await measureUpdateStateFiles(
         [...inventory.databases.values()].map(({ spellings }) => spellings[0]),
       )),

@@ -22,6 +22,7 @@ it("bounds OS readings and reports available space on the home volume", () => {
   const disk = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
     targetPath: os.homedir(),
     checkedPath: os.homedir(),
+    deviceId: 1,
     totalBytes: 500.4,
     availableBytes: 600,
   });
@@ -41,7 +42,7 @@ it("bounds OS readings and reports available space on the home volume", () => {
 
 it.each([
   null,
-  { targetPath: "/home", checkedPath: "/home", totalBytes: null, availableBytes: 100 },
+  { targetPath: "/home", checkedPath: "/home", deviceId: 1, totalBytes: null, availableBytes: 100 },
 ])("omits unavailable disk capacity and zero-only load averages", (disk) => {
   vi.spyOn(os, "loadavg").mockReturnValue([0, 0, 0]);
   vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue(disk);

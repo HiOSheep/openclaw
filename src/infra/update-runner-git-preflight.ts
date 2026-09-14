@@ -103,13 +103,16 @@ function resolvePreflightWorktreeDir(preflightRoot: string) {
   return path.join(preflightRoot, PREFLIGHT_WORKTREE_DIRNAME);
 }
 
+export function resolveGitPreflightBaseDir(gitRoot: string): string {
+  return process.platform === "win32" && path.sep === "\\"
+    ? path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR)
+    : path.join(gitRoot, ".artifacts");
+}
+
 async function createPreflightRoot(gitRoot: string) {
   // On POSIX, ignored artifact storage keeps interrupted worktrees out of Git status.
   // Honor existing redirects like build-all-cache; only the mkdtemp child is private.
-  const baseDir =
-    process.platform === "win32" && path.sep === "\\"
-      ? path.win32.join(process.env.SystemDrive ?? "C:", WINDOWS_PREFLIGHT_BASE_DIR)
-      : path.join(await fs.realpath(gitRoot), ".artifacts");
+  const baseDir = resolveGitPreflightBaseDir(await fs.realpath(gitRoot));
   await fs.mkdir(baseDir, { recursive: true });
   return fs.mkdtemp(path.join(baseDir, PREFLIGHT_TEMP_PREFIX));
 }

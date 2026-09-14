@@ -12,6 +12,7 @@ import {
   resolveDevUpdateTargetRevision,
   type DevUpdateTarget,
 } from "../../infra/update-dev-target.js";
+import { UPDATE_DISK_SPACE_FAILURE_REASON } from "../../infra/update-disk-space.js";
 import {
   createGlobalInstallEnv,
   verifyPackageUpdateRecovery,
@@ -50,9 +51,11 @@ import {
 } from "./shared.js";
 import {
   prepareGitPackageExposure,
+  preflightUpdateInstallCapacity,
   readPackageUpdateIdentity,
   runPackageUpdateDoctor,
 } from "./update-command-package.js";
+import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 import {
   resolvePreparedGatewayUpdatePolicy,
@@ -452,6 +455,8 @@ export async function updateGitInstall(params: {
   onConfigSnapshot?: Parameters<typeof runPackageUpdateDoctor>[0]["onConfigSnapshot"];
   getDoctorContext?: Parameters<typeof runPackageUpdateDoctor>[0]["getDoctorContext"];
   getManagedServiceEnv: () => NodeJS.ProcessEnv | undefined;
+  capacityEnv?: NodeJS.ProcessEnv;
+  jsonMode?: boolean;
   invocationCwd?: string;
   nodeRunner?: string;
   inspectGitTarget?: UpdateRunnerOptions["inspectGitTarget"];
@@ -490,6 +495,32 @@ export async function updateGitInstall(params: {
         ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
         : verifyPackageUpdateRecovery(params.root)),
       steps: [],
+      durationMs: Date.now() - params.startedAt,
+    };
+  }
+
+  const capacity = await preflightUpdateInstallCapacity({
+    root: params.root,
+    gitRoot: updateRoot,
+    installTarget: installTarget ?? undefined,
+    env: resolveUpdateTargetEnv({
+      baseEnv: installEnv,
+      serviceEnv: params.getManagedServiceEnv() ?? params.capacityEnv,
+      invocationCwd: params.invocationCwd,
+    }),
+    progress: params.progress,
+    jsonMode: params.jsonMode === true,
+  });
+  if (capacity.exitCode !== 0) {
+    return {
+      status: "error",
+      mode: "git",
+      root: params.root,
+      reason: UPDATE_DISK_SPACE_FAILURE_REASON,
+      steps: [capacity],
+      recovery: await (params.installKind === "git"
+        ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
+        : verifyPackageUpdateRecovery(params.root)),
       durationMs: Date.now() - params.startedAt,
     };
   }
@@ -587,14 +618,14 @@ export async function updateGitInstall(params: {
         recovery: await (params.installKind === "git"
           ? readCurrentGitUpdateRecovery(params.root, effectiveTimeout)
           : verifyPackageUpdateRecovery(params.root)),
-        steps: [cloneStep],
+        steps: [capacity, cloneStep],
         durationMs: Date.now() - params.startedAt,
       };
     }
 
     const updateResult = stagedUpdateResult ?? (await runUpdate(updateRoot));
     const before = previousPackage ?? updateResult.before;
-    const steps = [...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
+    const steps = [capacity, ...(cloneStep ? [cloneStep] : []), ...updateResult.steps];
     if (exposure && updateResult.status === "ok") {
       const packageUpdate = await exposure.activate();
       return {

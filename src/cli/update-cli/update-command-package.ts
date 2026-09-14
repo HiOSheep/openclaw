@@ -1,15 +1,19 @@
 import path from "node:path";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
-import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
   type PackageUpdateTransaction,
 } from "../../infra/package-update-steps.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import {
+  assessUpdateDiskSpace,
+  UPDATE_DISK_SPACE_FAILURE_REASON,
+} from "../../infra/update-disk-space.js";
 import {
   formatUpdateDoctorConfigWriteRefusal,
   getUpdateDoctorConfigFailureReason,
@@ -61,13 +65,46 @@ import {
   type UpdateCommandChildGrant,
 } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
-import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
+import { resolveUpdateTargetEnv, withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
     readPackageVersion(root),
     readBuiltGatewayBuildId(root),
   ]);
   return { version, ...(buildId ? { buildId } : {}) };
+}
+
+/** Present one capacity decision through the same progress/ledger path as installation steps. */
+export async function preflightUpdateInstallCapacity(
+  params: Omit<Parameters<typeof assessUpdateDiskSpace>[0], "config"> & {
+    progress: ReturnType<typeof createUpdateProgress>["progress"];
+    jsonMode: boolean;
+  },
+): Promise<UpdateStepResult> {
+  const info = {
+    name: "disk space preflight",
+    command: "disk space preflight",
+    index: 0,
+    total: 0,
+  };
+  params.progress.onStepStart?.(info);
+  const { config } = await withOwnedManagedUpdateEnv(params.env, () =>
+    readConfigFileSnapshot({ skipPluginValidation: true, observe: false }),
+  );
+  const step = await assessUpdateDiskSpace({ ...params, config });
+  params.progress.onStepComplete?.({ ...step, index: 0, total: 0 });
+  if (step.exitCode !== 0) {
+    defaultRuntime.error(step.stderrTail ?? UPDATE_DISK_SPACE_FAILURE_REASON);
+  } else {
+    for (const warning of step.warnings ?? []) {
+      if (params.jsonMode) {
+        defaultRuntime.error(`Warning: ${warning}`);
+      } else {
+        defaultRuntime.log(theme.warn(warning));
+      }
+    }
+  }
+  return step;
 }
 
 type PackageDoctorOptions = {
@@ -344,6 +381,7 @@ export type PackageInstallUpdateParams = {
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
   managedServiceEnv?: NodeJS.ProcessEnv;
+  capacityEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
   honorPackageRoot?: boolean;
   nodeRunner?: string;
@@ -463,16 +501,28 @@ export async function runPackageInstallUpdate(
 
   const before = pkgRoot ? await readPackageUpdateIdentity(pkgRoot) : { version: null };
 
-  const diskWarning = createLowDiskSpaceWarning({
-    targetPath: pkgRoot ? path.dirname(pkgRoot) : params.root,
-    purpose: "global package update",
+  const capacity = await preflightUpdateInstallCapacity({
+    root: params.root,
+    installTarget,
+    env: resolveUpdateTargetEnv({
+      baseEnv: installEnv,
+      serviceEnv: params.managedServiceEnv ?? params.capacityEnv,
+      invocationCwd: params.invocationCwd,
+    }),
+    progress: params.progress,
+    jsonMode: params.jsonMode,
   });
-  if (diskWarning) {
-    if (params.jsonMode) {
-      defaultRuntime.error(`Warning: ${diskWarning}`);
-    } else {
-      defaultRuntime.log(theme.warn(diskWarning));
-    }
+  if (capacity.exitCode !== 0) {
+    return {
+      status: "error",
+      mode: installTarget.manager,
+      root: pkgRoot ?? params.root,
+      reason: UPDATE_DISK_SPACE_FAILURE_REASON,
+      before,
+      steps: [capacity],
+      recovery: await verifyPackageUpdateRecovery(pkgRoot ?? params.root),
+      durationMs: Date.now() - params.startedAt,
+    };
   }
 
   const packageUpdate = await runGlobalPackageUpdateSteps({
@@ -527,7 +577,7 @@ export async function runPackageInstallUpdate(
       version: packageUpdate.afterVersion,
       ...(afterBuildId ? { buildId: afterBuildId } : {}),
     },
-    steps: packageUpdate.steps,
+    steps: [capacity, ...packageUpdate.steps],
     recovery: packageUpdate.recovery,
     localOverrides: packageUpdate.localOverrides,
     durationMs: Date.now() - params.startedAt,

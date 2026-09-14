@@ -2,16 +2,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.ts";
+import * as diskSpace from "../../infra/disk-space.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import {
   createNpmTarget,
   writePackageRoot,
 } from "../../infra/package-update-steps.test-support.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as processRunner from "../../process/exec.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runPackageInstallUpdate, stagePackageInstallUpdate } from "./update-command-package.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 
 afterEach(() => vi.restoreAllMocks());
+afterEach(() => closeOpenClawStateDatabaseForTest());
 
 async function createPackageInstallFixture(
   base: string,
@@ -69,6 +74,126 @@ async function createPackageInstallFixture(
   };
   return { root, target, launcher, installedPrefixes, expectOriginalInstallation };
 }
+
+it.each([
+  "npm-prefix",
+  "snapshot",
+  "shared-volume",
+  "snapshot-fallback",
+  "unknown",
+  "incomplete",
+  "plenty",
+] as const)(
+  "checks %s capacity before package staging and records the outcome",
+  async (scenario) => {
+    await withTestDir({ prefix: "update-capacity-" }, async (base) => {
+      const fixture = await createPackageInstallFixture(base, "2.0.0");
+      if (scenario === "shared-volume") {
+        const payload = path.join(fixture.root, "payload.bin");
+        await fs.writeFile(payload, "");
+        await fs.truncate(payload, 80 * 1024 * 1024);
+      }
+      const prefix = path.join(base, "prefix");
+      const stateDir = path.join(base, "state");
+      const env = {
+        HOME: base,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        TMPDIR: path.join(base, "snapshot-tmp"),
+      };
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+      const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+      const mib = 1024 * 1024;
+      vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => {
+        if (scenario === "unknown") {
+          return null;
+        }
+        const packageVolume = targetPath.startsWith(prefix);
+        const stateVolume =
+          targetPath === stateDir || targetPath.startsWith(`${stateDir}${path.sep}`);
+        const availableBytes =
+          scenario === "shared-volume"
+            ? 240 * mib
+            : scenario === "snapshot-fallback" && targetPath === env.TMPDIR
+              ? 150 * mib
+              : (scenario === "npm-prefix" && packageVolume) ||
+                  (scenario === "snapshot" && !packageVolume && !stateVolume)
+                ? (scenario === "snapshot" ? 128 : 32) * mib
+                : scenario === "incomplete"
+                  ? 512 * mib
+                  : 8 * 1024 * mib;
+        return {
+          targetPath,
+          checkedPath: targetPath,
+          deviceId:
+            scenario === "shared-volume"
+              ? 1
+              : packageVolume
+                ? 1
+                : stateVolume
+                  ? 2
+                  : targetPath === env.TMPDIR
+                    ? 3
+                    : 4,
+          availableBytes,
+          totalBytes: 16 * 1024 * mib,
+        };
+      });
+      const allocate = vi.spyOn(fs, "mkdtemp");
+      const validateCandidate = vi.fn(async () => [
+        { name: "synthetic canary stop", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
+      ]);
+      const result = await runPackageInstallUpdate({
+        root: fixture.root,
+        installKind: "package",
+        tag: "2.0.0",
+        installTarget: fixture.target,
+        installEnv: env,
+        managedServiceEnv: env,
+        timeoutMs: 1000,
+        startedAt: Date.now(),
+        progress: {},
+        jsonMode: true,
+        validateCandidate,
+        beforeActivate: vi.fn(),
+        onTransaction: vi.fn(),
+      });
+      completeUpdateCommandRun(result, run);
+      const recorded = getUpdateRun(run.runId, { env });
+      if (scenario === "npm-prefix" || scenario === "snapshot" || scenario === "shared-volume") {
+        expect(result.reason).toBe("insufficient-disk-space");
+        const refusal = result.steps.find((step) => step.name === "disk space preflight");
+        expect(refusal).toMatchObject({ exitCode: 1 });
+        expect(refusal?.stderrTail).toContain(scenario === "npm-prefix" ? prefix : env.TMPDIR);
+        expect(refusal?.stderrTail).toMatch(/required|needed/);
+        expect(refusal?.stderrTail).toContain(
+          scenario === "shared-volume" ? "240 MiB" : scenario === "snapshot" ? "128 MiB" : "32 MiB",
+        );
+        expect(refusal?.stderrTail).toContain("Free");
+        expect(fixture.installedPrefixes).toEqual([]);
+        expect(allocate).not.toHaveBeenCalled();
+        expect(validateCandidate).not.toHaveBeenCalled();
+        expect(recorded).toMatchObject({ status: "failed", reason: "insufficient-disk-space" });
+      } else {
+        expect(fixture.installedPrefixes).toHaveLength(1);
+        expect(validateCandidate).toHaveBeenCalledOnce();
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "synthetic canary stop" }),
+        );
+        expect(recorded?.steps).toContainEqual(
+          expect.objectContaining({
+            step: "warning:disk space preflight",
+            detail:
+              "capacity estimate incomplete: plugin copies and registered external databases are measured after staging",
+          }),
+        );
+      }
+      expect(await fs.readFile(env.OPENCLAW_CONFIG_PATH, "utf8")).toBe("{}\n");
+      await fixture.expectOriginalInstallation();
+    });
+  },
+);
 
 it.each([
   "1.0.0",

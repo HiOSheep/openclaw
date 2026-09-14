@@ -1241,6 +1241,7 @@ describe("backupVerifyCommand", () => {
               : {
                   targetPath,
                   checkedPath: targetPath,
+                  deviceId: 1,
                   availableBytes,
                   totalBytes: 1024 * 1024 * 1024,
                 },

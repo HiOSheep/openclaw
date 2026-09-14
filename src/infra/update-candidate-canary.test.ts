@@ -113,6 +113,7 @@ describe("update candidate canary", () => {
     const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
       targetPath,
       checkedPath: targetPath,
+      deviceId: 1,
       availableBytes: 0,
       totalBytes: 1024,
     }));

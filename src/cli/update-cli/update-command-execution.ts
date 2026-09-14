@@ -594,6 +594,7 @@ export async function executeMutableUpdate(
         validateCandidate,
         beforeActivate,
         managedServiceEnv: preManagedServiceStop?.serviceEnv,
+        capacityEnv: opts.run?.env,
         onTransaction: (transaction) => {
           packageTransaction = transaction;
         },
@@ -637,6 +638,8 @@ export async function executeMutableUpdate(
         getDoctorContext,
         // Foreign inspection metadata cannot authorize backup or Doctor writes.
         getManagedServiceEnv: () => ownedManagedUpdateContext?.env,
+        capacityEnv: opts.run?.env,
+        jsonMode: Boolean(opts.json),
         invocationCwd: params.invocationCwd,
         nodeRunner: params.packageUpdateNodeRunner,
         validateCandidate: async (candidateRoot) => {

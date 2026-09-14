@@ -314,6 +314,13 @@ different npm prefix alone does not isolate operator state.
 
   </Accordion>
   <Accordion title="Disk-space preflight">
-    Before package updates and explicit plugin installs, OpenClaw tries a best-effort disk-space check for the target volume. Low space produces a warning with the checked path, but does not block the update because filesystem quotas, snapshots, and network volumes can change after the check. The actual package-manager install and post-install verification remain authoritative.
+    Before update staging, OpenClaw compares a known lower bound with free space on each affected filesystem. The estimate includes the current installation and dependency tree, the automatic config copy, and the canary's initially discoverable SQLite database families. Costs on the same filesystem are added together, with 100 MiB reserved for normal config, session, and log writes. The updater keeps a config copy, not a full-state backup.
+
+    Snapshot space is charged to an eligible snapshot destination: `TMPDIR`, the capture directory beside the state directory, or the system temporary directory. The state directory and its sibling capture directory can be on different filesystems.
+
+    A known shortfall refuses the update before staging and records the required, available, and missing bytes with the affected paths. Free space on those filesystems and retry. An incomplete inventory or unavailable measurement produces a recorded warning; plugin copies and registered external databases are measured by the existing complete check after staging. Package-manager scratch growth and changes by other processes can still cause later exhaustion.
+
+    This preflight runs in the installed updater. An already-installed 2026.9.3 updater retains its previous late-failure behavior for the first update that installs this repair.
+
   </Accordion>
 </AccordionGroup>
