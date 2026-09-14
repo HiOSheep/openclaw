@@ -262,6 +262,8 @@ describe("qa scenario catalog channel contracts", () => {
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(flow).toContain("env.gateway.call('send'");
+    expect(flow.match(/env\.gateway\.call\('send'/g)).toHaveLength(2);
+    expect(flow).toContain("idempotencyKey: randomUUID(), message: config.seedMarker");
     expect(flow).toContain("sendError.includes('504')");
     expect(flow).toContain("matchingOutbound.length === 1");
     expect(flow).toContain("seed proactive conversation reference");
