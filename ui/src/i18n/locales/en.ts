@@ -986,7 +986,6 @@ export const en: TranslationMap & {
     placementClonesRepository:
       "Clones {folder} on the selected runner. No Gateway checkout is created.",
     folder: "Folder",
-    folderPlaceholder: "Agent workspace",
     yourDevices: "Your devices",
     autoDevice: "Auto",
     autoDeviceSub: "Least-busy device",
@@ -1010,13 +1009,6 @@ export const en: TranslationMap & {
     capabilityVoice: "Voice",
     environmentDisposable: "Disposable",
     environmentPersistent: "Persistent",
-    projects: "Projects",
-    projectsAdminHint: "Admins can register projects from Browse folders",
-    projectSearchPlaceholder: "Search projects or paste a Git URL",
-    githubProjects: "GitHub",
-    githubTokenHint:
-      "No Control UI GitHub credential or shared Gateway environment token is configured; public GitHub results only.",
-    cloneProject: "Clone",
     registerProject: "Register as project",
     cloud: "Cloud",
     machine: "Machine",
@@ -1025,7 +1017,6 @@ export const en: TranslationMap & {
     machineCpu: "{cpu} vCPU",
     machineMemory: "{memory} GB",
     machineDefault: "Default",
-    recentFolders: "Recent",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
     browseRequiresAdmin:
@@ -1038,10 +1029,6 @@ export const en: TranslationMap & {
     browserLoadFailed: "Couldn't list that folder.",
     hiddenFolder: "Hidden folder",
     worktree: "Worktree",
-    newWorkspace: "New workspace",
-    newWorkspaceDescription: "Start in an empty folder for this session.",
-    remoteSourceUnavailable:
-      "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
     checkingGit: "Checking Git availability…",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     worktreeUnavailable: "Selected folder is not a Git checkout",
@@ -1083,7 +1070,6 @@ export const en: TranslationMap & {
     nodeUnavailable: "The selected device is unavailable. Pick another place.",
     terminalCapabilityOverridesUnsupported:
       "Clear session capability overrides before starting in a terminal.",
-    what: "What",
     checkout: "Checkout",
     checkoutCurrent: "Current checkout",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",

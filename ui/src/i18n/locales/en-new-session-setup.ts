@@ -4,6 +4,20 @@ import { en } from "./en.ts";
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    folderPlaceholder: "Agent workspace",
+    projects: "Projects",
+    projectsAdminHint: "Admins can register projects from Browse folders",
+    projectSearchPlaceholder: "Search projects or paste a Git URL",
+    githubProjects: "GitHub",
+    githubTokenHint:
+      "No Control UI GitHub credential or shared Gateway environment token is configured; public GitHub results only.",
+    cloneProject: "Clone",
+    recentFolders: "Recent",
+    what: "What",
+    newWorkspace: "New workspace",
+    newWorkspaceDescription: "Start in an empty folder for this session.",
+    remoteSourceUnavailable:
+      "This folder cannot provide a Git checkout. Select New workspace to start empty, or choose a repository.",
     environmentSearchPlaceholder: "Search environments",
     environmentSearchEmpty: "No matching environments",
     gatewayHost: "Gateway host",
