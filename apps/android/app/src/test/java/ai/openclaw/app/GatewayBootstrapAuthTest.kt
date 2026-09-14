@@ -1926,7 +1926,7 @@ class GatewayBootstrapAuthTest {
 
     val options =
       readField<GatewayConnectOptions>(
-        waitForDesiredConnection(runtime, "nodeSession"),
+        waitForDesiredConnection(runtime, "nodeSession", original),
         "options",
       )
     assertTrue(options.permissions.getValue("camera"))
