@@ -209,6 +209,7 @@ class CronPage extends OpenClawLightDomElement {
       // A route filter owns a new inventory snapshot; late responses keep the retired state.
       if (JSON.stringify(this.cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
         this.resetGatewayState(this.context.gateway.snapshot);
+        this.ensureInitialData();
       }
       this.listTab = "tasks";
       this.detailTab = "settings";
@@ -216,7 +217,6 @@ class CronPage extends OpenClawLightDomElement {
       this.routeJobRequested = false;
       this.highlightedRunId = null;
       this.pendingRunScroll = false;
-      this.ensureInitialData();
     }
   }
 
