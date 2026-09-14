@@ -35,20 +35,127 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([
-  { mode: "automatic", hidden: false, reject: false, replacementFails: false },
-  { mode: "automatic", hidden: false, reject: true, replacementFails: false },
-  { mode: "automatic", hidden: true, reject: false, replacementFails: false },
-  { mode: "automatic", hidden: true, reject: true, replacementFails: false },
-  { mode: "explicit", hidden: false, reject: false, replacementFails: false },
-  { mode: "explicit", hidden: false, reject: false, replacementFails: true },
-  { mode: "picker", hidden: false, reject: false, replacementFails: false },
-  { mode: "picker", hidden: false, reject: false, replacementFails: true },
-])(
-  "preserves cold catalog demand across an unrelated session event ($mode, hidden: $hidden, rejection: $reject, replacement failure: $replacementFails)",
-  async ({ mode, hidden, reject, replacementFails }) => {
+type ColdCatalogEventCase = {
+  label: string;
+  payload: Record<string, unknown>;
+  mode?: "automatic" | "explicit" | "picker";
+  hidden?: boolean;
+  reject?: boolean;
+  replacementFails?: boolean;
+  sessionKey?: string;
+  mainSessionKey?: string;
+  hasDefaults?: boolean;
+  preserveCatalog?: boolean;
+};
+
+const coldCatalogEventCases: ColdCatalogEventCase[] = [
+  ...[
+    { mode: "automatic" as const, hidden: false, reject: false, replacementFails: false },
+    { mode: "automatic" as const, hidden: false, reject: true, replacementFails: false },
+    { mode: "automatic" as const, hidden: true, reject: false, replacementFails: false },
+    { mode: "automatic" as const, hidden: true, reject: true, replacementFails: false },
+    { mode: "explicit" as const, hidden: false, reject: false, replacementFails: false },
+    { mode: "explicit" as const, hidden: false, reject: false, replacementFails: true },
+    { mode: "picker" as const, hidden: false, reject: false, replacementFails: false },
+    { mode: "picker" as const, hidden: false, reject: false, replacementFails: true },
+  ].map((scenario) =>
+    Object.assign(scenario, {
+      label: "unrelated reason-only message",
+      payload: { key: "agent:main:other", agentId: "main", reason: "message" },
+    }),
+  ),
+  ...(["automatic", "explicit", "picker"] as const).map((mode) => ({
+    mode,
+    label: "unrelated canonical message phase",
+    payload: { sessionKey: "agent:main:other", agentId: "main", phase: "message" },
+    preserveCatalog: true,
+  })),
+  {
+    label: "matching canonical message phase",
+    payload: { sessionKey: "agent:main:cold", agentId: "main", phase: "message" },
+  },
+  {
+    label: "raw main message alias",
+    payload: { sessionKey: "main", agentId: "main", phase: "message" },
+  },
+  {
+    label: "raw main catalog alias",
+    sessionKey: "main",
+    payload: { sessionKey: "agent:main:other", agentId: "main", phase: "message" },
+  },
+  {
+    label: "raw global catalog alias",
+    sessionKey: "global",
+    payload: { sessionKey: "agent:main:other", agentId: "main", phase: "message" },
+  },
+  {
+    label: "configured global message alias",
+    mainSessionKey: "global",
+    payload: { sessionKey: "agent:main:main", agentId: "main", phase: "message" },
+  },
+  {
+    label: "configured global catalog alias",
+    sessionKey: "agent:main:main",
+    mainSessionKey: "global",
+    payload: { sessionKey: "agent:main:other", agentId: "main", phase: "message" },
+  },
+  {
+    label: "contradictory message owner",
+    payload: { sessionKey: "agent:other:changed", agentId: "main", phase: "message" },
+  },
+  {
+    label: "missing message owner",
+    payload: { sessionKey: "agent:main:other", phase: "message" },
+  },
+  {
+    label: "missing session defaults",
+    hasDefaults: false,
+    payload: { sessionKey: "agent:main:other", agentId: "main", phase: "message" },
+  },
+  {
+    label: "message phase carrying a mutation reason",
+    payload: {
+      sessionKey: "agent:main:other",
+      agentId: "main",
+      phase: "message",
+      reason: "patch",
+    },
+  },
+  ...["command-metadata", "patch", "reset"].map((reason) => ({
+    label: `unrelated ${reason} mutation`,
+    payload: { sessionKey: "agent:main:other", agentId: "main", reason },
+  })),
+];
+
+const coldCatalogEventDefaults: Required<Omit<ColdCatalogEventCase, "label" | "payload">> = {
+  mode: "automatic",
+  hidden: false,
+  reject: false,
+  replacementFails: false,
+  sessionKey: "agent:main:cold",
+  mainSessionKey: "agent:main:main",
+  hasDefaults: true,
+  preserveCatalog: false,
+};
+
+it.each(
+  coldCatalogEventCases.map((scenario) => Object.assign({}, coldCatalogEventDefaults, scenario)),
+)(
+  "preserves catalog demand across $label ($mode, hidden: $hidden, rejection: $reject, replacement failure: $replacementFails)",
+  async ({
+    mode,
+    hidden,
+    reject,
+    replacementFails,
+    sessionKey,
+    mainSessionKey,
+    hasDefaults,
+    preserveCatalog,
+    payload,
+  }) => {
     const pendingCatalog = createDeferred<ModelCatalogResult>();
     const fresh = { id: "fresh", name: "Fresh model", provider: "example" };
+    const initial = { ...fresh, id: "initial" };
     let catalogReads = 0;
     const request = createGatewayRequestMock((method) => {
       if (method === "models.list") {
@@ -63,14 +170,24 @@ it.each([
     });
     const client = createTestGatewayClient(request);
     const state = makeChatHost({ client }) as ChatPageHost;
+    const hello = hasDefaults
+      ? {
+          ...gatewayHelloForMethods([]),
+          snapshot: {
+            sessionDefaults: { defaultAgentId: "main", mainKey: "main", mainSessionKey },
+          },
+        }
+      : null;
+    state.hello = hello;
     state.connected = true;
-    state.sessionKey = "agent:main:cold";
+    state.sessionKey = sessionKey;
+    state.assistantAgentId = "main";
     let presented = true;
     state.chatMetadataIsPresented = () => presented;
     const shell = document.createElement("openclaw-app-shell") as unknown as ChatMetadataShell;
     shell.runtime = {
       context: {
-        gateway: { snapshot: { client, phase: "connected" } },
+        gateway: { snapshot: { client, hello, phase: "connected" } },
         agents: { state: { agentsList: null } },
         sessions: state.sessions,
       } as unknown as ApplicationContext,
@@ -81,15 +198,14 @@ it.each([
         : refreshChatMetadata(state, { automatic: mode === "automatic" });
     try {
       expect(catalogReads).toBe(1);
-      shell.handleGatewayEvent({
-        event: "sessions.changed",
-        payload: { key: "agent:main:other", agentId: "main", reason: "message" },
-      });
+      for (let index = 0; index < (preserveCatalog ? 3 : 1); index += 1) {
+        shell.handleGatewayEvent({ event: "sessions.changed", payload });
+      }
       presented = !hidden;
       if (reject) {
-        pendingCatalog.reject(new Error("Retired catalog request failed"));
+        pendingCatalog.reject(new Error("Initial catalog request failed"));
       } else {
-        pendingCatalog.resolve({ models: [{ ...fresh, id: "retired" }] });
+        pendingCatalog.resolve({ models: [initial] });
       }
       await loading;
       if (hidden) {
@@ -98,14 +214,23 @@ it.each([
         presented = true;
         await refreshChatMetadata(state, { automatic: true });
       }
-      expect(state.chatModelCatalog).toEqual(replacementFails ? [] : [fresh]);
+      if (preserveCatalog) {
+        expect(catalogReads).toBe(1);
+        for (let index = 0; index < 2; index += 1) {
+          shell.handleGatewayEvent({ event: "sessions.changed", payload });
+        }
+        await refreshChatModelCatalogOnDemand(state);
+      }
+      expect(state.chatModelCatalog).toEqual(
+        replacementFails ? [] : preserveCatalog ? [initial] : [fresh],
+      );
       if (replacementFails) {
         expect(state.chatModelCatalogError).toContain("Replacement catalog failed");
       } else {
         expect(state.chatModelCatalogError).toBeNull();
       }
       expect(state.chatModelsLoading).toBe(false);
-      expect(catalogReads).toBe(2);
+      expect(catalogReads).toBe(preserveCatalog ? 1 : 2);
       expect(request.mock.calls.filter(([method]) => method === "chat.metadata")).toHaveLength(
         mode === "picker" ? 0 : 1,
       );

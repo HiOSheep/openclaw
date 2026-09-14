@@ -7,7 +7,10 @@ export type ModelCatalogReadScope = Pick<
   ModelsListParams,
   "agentId" | "sessionKey" | "authProfileId"
 >;
-type ModelCatalogInvalidationScope = ModelCatalogReadScope & { sessionsOnly?: boolean };
+type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
+  sessionsOnly?: boolean;
+  matchesScope?: (candidate: ModelCatalogReadScope) => boolean;
+};
 export type ModelCatalogCacheUpdate =
   | { type: "published" }
   | { type: "invalidated"; matches: (scope: ModelsListParams, key: string) => boolean };
@@ -262,7 +265,8 @@ export function invalidateModelCatalogCache(
         readScope.agentId === undefined ||
         readScope.agentId === scope.agentId.trim()) &&
       (scope.sessionKey === undefined || readScope.sessionKey === scope.sessionKey) &&
-      (scope.authProfileId === undefined || readScope.authProfileId === scope.authProfileId));
+      (scope.authProfileId === undefined || readScope.authProfileId === scope.authProfileId) &&
+      scope.matchesScope?.(readScope) !== false);
   for (const read of cache.reads) {
     if (matches(read.scope)) {
       cache.reads.delete(read);
