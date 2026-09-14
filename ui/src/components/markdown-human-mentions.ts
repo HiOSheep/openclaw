@@ -44,7 +44,7 @@ export function restoreMarkdownHumanMentions(
 ): string {
   let restored = value;
   for (const token of tokens) {
-    restored = restored.replaceAll(token.marker, token.label);
+    restored = restored.replaceAll(token.marker, () => token.label);
   }
   return restored;
 }

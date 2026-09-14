@@ -61,6 +61,21 @@ describe("explicit human mention Markdown", () => {
     expect(rendered).toContain("@Ada");
   });
 
+  it.each(["$&", "$$", "$`", "$'"])(
+    "restores %s literally inside an existing Markdown link",
+    (suffix) => {
+      const label = "@Ada " + suffix;
+      const source = "Before [" + label + "](https://example.test) after";
+      const rendered = toSanitizedMarkdownHtml(source, {
+        humanMentions: [selected(source, label)],
+      });
+      const fragment = htmlFragment(rendered);
+      expect(fragment.querySelector("a")?.textContent).toBe(label);
+      expect(fragment.textContent?.trim()).toBe("Before " + label + " after");
+      expect(rendered).not.toContain("openclawhumanmention");
+    },
+  );
+
   it("does not trust raw custom element markup or infer identity from plain names", () => {
     const source =
       '@Ada <openclaw-person-reference profile-id="secret" label="@Ada">@Ada</openclaw-person-reference>';

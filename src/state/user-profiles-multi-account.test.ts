@@ -79,11 +79,30 @@ describe("multi-account people", () => {
     db.exec(
       "CREATE TABLE user_profiles (id TEXT NOT NULL PRIMARY KEY, display_name TEXT, avatar BLOB, avatar_mime TEXT, avatar_sha256 TEXT, merged_into TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT",
     );
+    db.exec(
+      "CREATE TABLE user_profile_identities (provider TEXT NOT NULL, subject TEXT NOT NULL, profile_id TEXT NOT NULL, canonical_login TEXT, created_at INTEGER NOT NULL, PRIMARY KEY (provider, subject)) STRICT",
+    );
+    db.prepare(
+      "INSERT INTO user_profiles (id, display_name, created_at, updated_at) VALUES (?, ?, 1, 1)",
+    ).run("legacy-person", "Saved Person Name");
+    db.prepare(
+      "INSERT INTO user_profile_identities (provider, subject, profile_id, canonical_login, created_at) VALUES ('github', '70', ?, 'legacy', 1)",
+    ).run("legacy-person");
     const version = db.prepare("PRAGMA user_version").get()?.user_version;
+    expect(getUserProfileListItem("legacy-person", options)).toMatchObject({
+      displayName: "Saved Person Name",
+      githubIdentity: { login: "legacy" },
+    });
     const profile = syncEmailGitHubProfile(
       { accountId: 70, canonicalLogin: "legacy", email: "legacy@example.test" },
       options,
     );
+    expect(profile.id).toBe("legacy-person");
+    expect(
+      db
+        .prepare("SELECT primary_github_account_id FROM user_profiles WHERE id = ?")
+        .get(profile.id),
+    ).toEqual({ primary_github_account_id: 70 });
     expect(db.prepare("PRAGMA table_info(user_profiles)").all()).toContainEqual(
       expect.objectContaining({
         name: "primary_github_account_id",
@@ -95,7 +114,10 @@ describe("multi-account people", () => {
     );
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
     closeOpenClawStateDatabaseForTest();
-    expect(getUserProfileListItem(profile.id, options).githubIdentity?.login).toBe("legacy");
+    expect(getUserProfileListItem(profile.id, options)).toMatchObject({
+      displayName: "Saved Person Name",
+      githubIdentity: { login: "legacy" },
+    });
   });
   it("keeps both verified accounts on one person across merge and alternating sign-ins", () => {
     const options = stateOptions();
