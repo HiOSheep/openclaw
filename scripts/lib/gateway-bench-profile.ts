@@ -72,11 +72,9 @@ type GatewayProfileArtifacts = {
 
 function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
   const diagnosticsPath = `${profilePath}.diagnostics.json`;
-  return {
-    ...(existsSync(diagnosticsPath)
-      ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
-      : {}),
-  };
+  return existsSync(diagnosticsPath)
+    ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
+    : {};
 }
 
 export async function controlGatewayProfile(
