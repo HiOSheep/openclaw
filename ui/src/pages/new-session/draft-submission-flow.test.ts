@@ -32,6 +32,44 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow", () => {
+  it("retires only the captured draft when creation succeeds after navigation", async () => {
+    const { context, flow } = createDraftFixture();
+    let accept!: (value: { key: string; initialRun: { status: "started"; runId: string } }) => void;
+    vi.mocked(context.sessions.createResult).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          accept = resolve;
+        }),
+    );
+    const clear = vi.spyOn(flow.draftPersistence, "clearSubmittedDraft").mockResolvedValue();
+    flow.draftPersistence.setOwner("ws://gateway.example", "principal-a");
+    flow.draftPersistence.selectRoute("original-route");
+    flow.setMessage("  @Alex submitted prompt  ", [{ profileId: "alex", start: 2, end: 7 }]);
+    stubObjectUrls("blob:submitted-file");
+    const attachment = registerTextPayload("submitted-file");
+    flow.attachmentDraft.replace([attachment]);
+    const pending = flow.submit();
+    await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+    flow.invalidate("gateway-changed");
+    flow.disconnect();
+    flow.resetDraft();
+    flow.draftPersistence.selectRoute("replacement-route");
+    flow.setMessage("a newer prompt");
+    accept({ key: "agent:main:created", initialRun: { status: "started", runId: "created-run" } });
+    await pending;
+    expect(clear).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        scope: expect.objectContaining({ scopeKey: "original-route" }),
+        message: "  @Alex submitted prompt  ",
+        mentions: [{ profileId: "alex", start: 2, end: 7 }],
+        attachments: [expect.objectContaining({ fileName: "submitted-file.txt" })],
+      }),
+    );
+    expect(flow.message).toBe("a newer prompt");
+    expect(context.navigateAndWait).not.toHaveBeenCalled();
+    flow.disconnect();
+  });
+
   it.each(["navigation", "reconnect"] as const)(
     "consumes an accepted draft before asynchronous cleanup and %s",
     async (next) => {

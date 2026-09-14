@@ -42,6 +42,9 @@ export class NewSessionDraftPersistence {
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private incognitoRetirement: Promise<void> = Promise.resolve();
   private readonly lineageByScope = new Map<string, DraftLineage>();
+  // Mounted views are projections of the durable draft. A departed submitter
+  // can retire their restored copy without owning their newer edits.
+  private static readonly active = new Set<NewSessionDraftPersistence>();
 
   constructor(
     private readonly read: () => NewSessionDraftState,
@@ -135,6 +138,7 @@ export class NewSessionDraftPersistence {
   }
 
   noteDraftReplaced() {
+    this.restoreGeneration += 1;
     this.pristineMutationBaseline = this.mutationGeneration;
   }
 
@@ -174,19 +178,28 @@ export class NewSessionDraftPersistence {
     }
   }
 
-  async clearSubmittedDraft(): Promise<void> {
+  captureSubmission() {
     this.persistNow();
-    this.mutationGeneration += 1;
+    const submitted = this.read();
     const scope = this.scope();
+    const lineage = scope ? this.lineage(scope) : null;
+    return {
+      scope,
+      writeIds: new Set([lineage?.writeId, ...(lineage?.localWriteIds ?? [])]),
+      message: submitted.message,
+      mentions: submitted.mentions?.map((mention) => ({ ...mention })),
+      attachments: captureDurableChatAttachments(submitted.attachments),
+    };
+  }
+
+  async clearSubmittedDraft(
+    submitted: ReturnType<NewSessionDraftPersistence["captureSubmission"]>,
+  ): Promise<void> {
+    const { scope } = submitted;
     if (!scope) {
       return;
     }
-    const submitted = this.read();
-    const submittedAttachments = captureDurableChatAttachments(submitted.attachments);
     const { readDurableComposerDraft } = await durableComposerStore;
-    const lineage = this.lineage(scope);
-    let expectedRevision = lineage.revision;
-    let expectedWriteId = lineage.writeId;
     // A closing source page can finish an identical write between read and CAS.
     // Re-read boundedly; differing newer content always wins immediately.
     for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -198,28 +211,24 @@ export class NewSessionDraftPersistence {
       const currentRevision =
         (current.status === "found" ? current.draft.revision : current.revision) ?? 0;
       const currentWriteId = current.status === "found" ? current.draft.writeId : current.writeId;
-      if (currentRevision !== expectedRevision || currentWriteId !== expectedWriteId) {
-        if (
-          current.status !== "found" ||
-          !(await durableComposerDraftMatches(
-            current.draft,
-            submitted.message,
-            submittedAttachments,
-            submitted.mentions,
-          ))
-        ) {
-          return;
-        }
-        expectedRevision = currentRevision;
-        expectedWriteId = currentWriteId;
-        this.adoptCommittedRevision(scope, currentRevision, currentWriteId);
+      if (
+        current.status !== "found" ||
+        !submitted.writeIds.has(current.draft.writeId) ||
+        !(await durableComposerDraftMatches(
+          current.draft,
+          submitted.message,
+          submitted.attachments,
+          submitted.mentions,
+        ))
+      ) {
+        return;
       }
-      const revision = nextDraftRevision(Math.max(this.revision, expectedRevision));
+      const revision = nextDraftRevision(currentRevision);
       const writeId = `clear:${revision}`;
       const { result } = await writeDurableComposerSnapshot({
         scope,
-        expectedRevision,
-        ...(expectedWriteId ? { expectedWriteId } : {}),
+        expectedRevision: currentRevision,
+        ...(currentWriteId ? { expectedWriteId: currentWriteId } : {}),
         revision,
         text: "",
         storedAttachments: [],
@@ -227,6 +236,16 @@ export class NewSessionDraftPersistence {
       });
       if (result.status === "persisted") {
         this.adoptCommittedRevision(scope, result.revision ?? revision, result.writeId ?? writeId);
+        for (const view of NewSessionDraftPersistence.active) {
+          const activeScope = view.scope();
+          if (
+            activeScope &&
+            durableComposerScopeIdentity(activeScope) === durableComposerScopeIdentity(scope)
+          ) {
+            view.restoredIdentity = "";
+            view.activateRoute(activeScope.scopeKey);
+          }
+        }
         return;
       }
       if (result.status === "storage-failed") {
@@ -282,7 +301,12 @@ export class NewSessionDraftPersistence {
     })();
   }
 
+  connect() {
+    NewSessionDraftPersistence.active.add(this);
+  }
+
   disconnect() {
+    NewSessionDraftPersistence.active.delete(this);
     this.persistNow();
     this.restoreGeneration += 1;
   }

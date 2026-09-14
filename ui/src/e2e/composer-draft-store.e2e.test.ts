@@ -778,7 +778,11 @@ suite.define(() => {
           clearPersistence.setOwner(clearScope.gatewayOwner, clearScope.recoveryScope);
           clearPersistence.activateRoute(clearScope.scopeKey);
           await waitFor(async () => clearState.message === "submitted draft");
-          await clearPersistence.clearSubmittedDraft();
+          const submittedDraft = clearPersistence.captureSubmission();
+          clearPersistence.disconnect();
+          clearPersistence.selectRoute("another-route");
+          clearState.message = "new route draft";
+          await clearPersistence.clearSubmittedDraft(submittedDraft);
           const clearRead = await draftStore.readDurableComposerDraft(clearScope);
 
           const staleClearScope = {
@@ -815,7 +819,9 @@ suite.define(() => {
             { revision: 81, text: "newer other-tab draft", attachments: [] },
             { expectedRevision: 80, writeId: "newer-other-tab-draft" },
           );
-          await staleClearPersistence.clearSubmittedDraft();
+          await staleClearPersistence.clearSubmittedDraft(
+            staleClearPersistence.captureSubmission(),
+          );
           const staleClearRead = await draftStore.readDurableComposerDraft(staleClearScope);
 
           const resetLineageScope = {
