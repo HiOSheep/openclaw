@@ -5877,6 +5877,9 @@ jobs:
           PY
           )"
           "$ANDROID_SDK_ROOT/build-tools/36.0.0/zipalign" -c -P 16 -v 4 "$apk"
+          if [[ "$BUILD_TYPE" == Debug ]]; then
+            python3 scripts/android-access-restart-proof.py "$apk" "$RUNNER_TEMP/access-native-evidence"
+          fi
 
       - name: Upload Access native test reports
         if: ${{ !cancelled() }}

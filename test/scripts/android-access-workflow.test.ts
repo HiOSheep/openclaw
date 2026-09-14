@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -174,6 +175,24 @@ describe("Android Access native workflow", () => {
     expect(upload.with.path).toContain("access-native-evidence/**");
   });
 
+  it("runs restart proof only after the original Debug cases and APK alignment qualify", () => {
+    const alignment = step.run.indexOf('zipalign" -c -P 16 -v 4 "$apk"');
+    const restart = step.run.indexOf("python3 scripts/android-access-restart-proof.py");
+    expect(restart).toBeGreaterThan(alignment);
+    expect(step.run.slice(alignment, restart)).toContain('if [[ "$BUILD_TYPE" == Debug ]]; then');
+    expect(step.run.slice(restart)).toContain('"$apk" "$RUNNER_TEMP/access-native-evidence"');
+    expect(step.run).toContain("trap 'adb -s emulator-5554 emu kill");
+    const fixture = readFileSync(
+      "apps/android/app/src/androidTest/java/ai/openclaw/app/gateway/CloudflareAccessRestartNativeTest.kt",
+      "utf8",
+    );
+    expect(fixture).toContain("@Test fun seedAcknowledgedSignOut()");
+    expect(fixture).toContain("@Test fun verifyAcknowledgedSignOut()");
+    expect(fixture).toContain(
+      'assumeTrue("Requires the two-process restart runner", arguments.containsKey("restartPhase"))',
+    );
+  });
+
   it("requires ordinary and strict simulated 16 KiB packaged execution", () => {
     expect(job.strategy).toEqual({
       "fail-fast": false,
@@ -254,6 +273,192 @@ ${guard}`,
       : (["Debug", "Release"] as const)) {
       const result = verifyReports(mode, buildType);
       expect(result.status, `${buildType}: ${result.stderr}`).not.toBe(0);
+    }
+  });
+});
+
+function runRestartProof(mode = "ready") {
+  const root = tempDirs.make("openclaw-android-restart-");
+  const result = spawnSync(
+    "python3",
+    [
+      "-B",
+      "-c",
+      String.raw`
+import contextlib, hashlib, importlib.util, io, json, os, pathlib, subprocess, sys
+helper, root, mode = sys.argv[1:]
+root = pathlib.Path(root)
+os.chdir(root)
+spec = importlib.util.spec_from_file_location("restart_proof", helper)
+proof = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(proof)
+app = pathlib.Path("apps/android/app/build/outputs/apk/play/debug/app.apk")
+test = pathlib.Path("apps/android/app/build/outputs/apk/androidTest/play/debug/test.apk")
+for apk, variant, package in [(app, "playDebug", proof.APP), (test, "playDebugAndroidTest", proof.APP + ".test")]:
+    apk.parent.mkdir(parents=True)
+    apk.write_bytes(b"unchanged test fixture apk" + package.encode())
+    element = {"outputFile": "../outside.apk" if mode == "outside-apk" else apk.name, "filters": []}
+    metadata = {"variantName": variant, "applicationId": package, "artifactType": {"type": "APK"},
+                "elements": [element, element] if mode == "ambiguous-apk" else [element]}
+    (apk.parent / "output-metadata.json").write_text(json.dumps(metadata))
+commands = []
+def run(args, check=True, timeout=30):
+    commands.append(args)
+    output, status, stderr = "", 0, ""
+    if args[0] == "git": output = "a" * 40
+    elif "instrumentation" in args:
+        output = "" if mode == "missing-target" else f"instrumentation:{proof.APP}.test/androidx.test.runner.AndroidJUnitRunner (target={proof.APP})\n"
+    elif "pidof" in args:
+        output, status = ("1234", 0) if mode == "seed-live" else ("", 1)
+    elif "instrument" in args:
+        phase = args[args.index("restartPhase") + 1]
+        method = args[args.index("class") + 1].split("#")[1]
+        receipt = {"nonce": args[args.index("restartNonce") + 1], "source": args[args.index("restartSource") + 1],
+                   "pid": 1234 if phase == "seed" or mode == "same-pid" else 2345, "uid": 10123,
+                   "package": proof.APP, "process": proof.APP, "apk": hashlib.sha256(app.read_bytes()).hexdigest(),
+                   "signer": "b" * 64, "storage": "c" * 64, "instance": "d" * 64, "phase": phase,
+                   "bootstrapExpiresAtMs": 1800000000000}
+        if phase == "verify": receipt["seedPid"] = 1234
+        if mode == "missing-deadline": del receipt["bootstrapExpiresAtMs"]
+        if mode == "deadline-bool": receipt["bootstrapExpiresAtMs"] = True
+        if mode == "deadline-string": receipt["bootstrapExpiresAtMs"] = "1800000000000"
+        if mode == "deadline-zero": receipt["bootstrapExpiresAtMs"] = 0
+        if phase == "verify" and mode == "changed-deadline": receipt["bootstrapExpiresAtMs"] += 1
+        if mode == "wrong-source": receipt["source"] = "f" * 40
+        if phase == "verify" and mode in ("changed-storage", "changed-signer"):
+            receipt[mode.removeprefix("changed-")] = "e" * 64
+        test_name = "anotherMethod" if mode == "wrong-case" else method
+        fields = f"INSTRUMENTATION_STATUS: class={proof.TEST_CLASS}\nINSTRUMENTATION_STATUS: test={test_name}\nINSTRUMENTATION_STATUS: numtests=1\nINSTRUMENTATION_STATUS: current=1\n"
+        codes = [] if mode == "empty" else [1, -3 if mode == "skipped" else -4 if mode == "assumption" else -2 if mode == "failed" else 0]
+        if mode == "duplicate": codes += [1, 0]
+        output = "".join(fields + f"INSTRUMENTATION_STATUS_CODE: {code}\n" for code in codes)
+        if mode != "missing-receipt": output += "INSTRUMENTATION_RESULT: accessRestartReceipt=" + json.dumps(receipt) + "\n"
+        output += "INSTRUMENTATION_CODE: -1\n"
+        if mode == "host-timeout": status, stderr = 124, "bounded host timeout"
+        if mode == "outer-timeout": raise subprocess.TimeoutExpired(args, timeout, output.encode(), b"outer host timeout")
+    return subprocess.CompletedProcess(args, status, output, stderr)
+proof.run = run
+ticks = iter([0, 10])
+proof.time.monotonic = lambda: next(ticks)
+error = None
+evidence = pathlib.Path("evidence")
+with contextlib.redirect_stdout(io.StringIO()):
+    try: proof.main(app, evidence)
+    except Exception as failure: error = str(failure)
+files = {p.name: p.read_text() for p in evidence.glob("*")}
+print(json.dumps({"error": error, "commands": commands, "files": files}))
+`,
+      path.resolve("scripts/android-access-restart-proof.py"),
+      root,
+      mode,
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  return JSON.parse(result.stdout) as {
+    error: string | null;
+    commands: string[][];
+    files: Record<string, string>;
+  };
+}
+
+describe("Android Access process restart proof", () => {
+  it("installs once, observes process exit and qualifies two exact passing cases with retained evidence", () => {
+    const { error, commands, files } = runRestartProof();
+    expect(error).toBeNull();
+    const invocations = commands.filter((args) => args.includes("instrument"));
+    expect(invocations).toHaveLength(2);
+    expect(invocations.map((args) => args[args.indexOf("class") + 1])).toEqual([
+      "ai.openclaw.app.gateway.CloudflareAccessRestartNativeTest#seedAcknowledgedSignOut",
+      "ai.openclaw.app.gateway.CloudflareAccessRestartNativeTest#verifyAcknowledgedSignOut",
+    ]);
+    for (const invocation of invocations) {
+      expect(invocation.slice(0, 7)).toEqual([
+        "/usr/bin/timeout",
+        "--signal=TERM",
+        "--kill-after=2s",
+        "60s",
+        "adb",
+        "-s",
+        "emulator-5554",
+      ]);
+    }
+    const first = commands.indexOf(invocations[0]!);
+    const second = commands.indexOf(invocations[1]!);
+    expect(commands.slice(0, first).filter((args) => args.includes("install"))).toHaveLength(2);
+    expect(
+      commands
+        .slice(first)
+        .some((args) =>
+          args.some((arg) => ["install", "uninstall", "clear", "force-stop"].includes(arg)),
+        ),
+    ).toBe(false);
+    expect(commands.slice(first + 1, second)).toContainEqual([
+      "adb",
+      "-s",
+      "emulator-5554",
+      "shell",
+      "pidof",
+      "ai.openclaw.app",
+    ]);
+    for (const phase of ["seed", "verify"]) {
+      expect(files[`restart-${phase}.status`]).toBe("0\n");
+      expect(files[`restart-${phase}.stderr`]).toBe("");
+      expect(files[`restart-${phase}.stdout`]).toContain("INSTRUMENTATION_STATUS_CODE: 0");
+    }
+    const receipt = JSON.parse(files["restart.json"]!);
+    expect(receipt.seedProcessExited).toBe(true);
+    expect(receipt.seed.pid).not.toBe(receipt.verify.pid);
+    expect(receipt.seed.storage).toBe(receipt.verify.storage);
+    expect(receipt.seed.apk).toBe(receipt.verify.apk);
+    expect(receipt.seed.bootstrapExpiresAtMs).toBe(1800000000000);
+    expect(receipt.verify.bootstrapExpiresAtMs).toBe(receipt.seed.bootstrapExpiresAtMs);
+    expect(receipt.testApk).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it.each([
+    "empty",
+    "skipped",
+    "assumption",
+    "failed",
+    "duplicate",
+    "wrong-case",
+    "missing-receipt",
+    "wrong-source",
+    "seed-live",
+    "same-pid",
+    "changed-storage",
+    "changed-signer",
+    "missing-deadline",
+    "deadline-bool",
+    "deadline-string",
+    "deadline-zero",
+    "changed-deadline",
+    "missing-target",
+    "outside-apk",
+    "ambiguous-apk",
+    "host-timeout",
+    "outer-timeout",
+  ])("rejects %s without claiming restart proof", (mode) => {
+    const { error, commands, files } = runRestartProof(mode);
+    expect(error).toBeTruthy();
+    expect(files).not.toHaveProperty("restart.json");
+    const expected = ["same-pid", "changed-storage", "changed-signer", "changed-deadline"].includes(
+      mode,
+    )
+      ? 2
+      : ["missing-target", "outside-apk", "ambiguous-apk"].includes(mode)
+        ? 0
+        : 1;
+    expect(commands.filter((args) => args.includes("instrument"))).toHaveLength(expected);
+    if (mode === "host-timeout") {
+      expect(files["restart-seed.status"]).toBe("124\n");
+      expect(files["restart-seed.stderr"]).toBe("bounded host timeout");
+    }
+    if (mode === "outer-timeout") {
+      expect(files["restart-seed.status"]).toBe("124\n");
+      expect(files["restart-seed.stderr"]).toBe("outer host timeout");
+      expect(files["restart-seed.stdout"]).toContain("INSTRUMENTATION_STATUS_CODE: 0");
     }
   });
 });
