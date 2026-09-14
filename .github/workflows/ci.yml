@@ -5195,6 +5195,7 @@ jobs:
             -parallel-testing-enabled NO \
             "${test_args[@]}" \
             test
+          python3 scripts/ios-access-restart-proof.py "$simulator_id"
           if [[ "$IOS_TEST_PHASE" == "tests" ]]; then
             xcodebuild \
               -project apps/ios/OpenClaw.xcodeproj \
