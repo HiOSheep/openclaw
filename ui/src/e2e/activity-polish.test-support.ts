@@ -55,15 +55,16 @@ export function activityPolishFixture(now = Date.now()) {
       text: "",
       state: "updating",
     },
-  ].map(({ text, state, ...row }, index) => ({
-    ...row,
-    kind: "direct" as const,
-    agentId: "main",
-    sessionId: `activity-polish-${index}`,
-    updatedAt: now - (index + 1) * 3_600_000,
-    createdActor: { type: "human", id: "alex-example", label: "Alex Morgan" },
-    activitySummary: { state, canEnsure: true, text, updatedAt: now - 3_600_000 },
-  }));
+  ].map(({ text, state, ...row }, index) =>
+    Object.assign(row, {
+      kind: "direct" as const,
+      agentId: "main",
+      sessionId: `activity-polish-${index}`,
+      updatedAt: now - (index + 1) * 3_600_000,
+      createdActor: { type: "human", id: "alex-example", label: "Alex Morgan" },
+      activitySummary: { state, canEnsure: true, text, updatedAt: now - 3_600_000 },
+    }),
+  );
   const list = {
     count: sessions.length,
     defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },

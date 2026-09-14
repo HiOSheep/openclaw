@@ -1,3 +1,4 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionActivitySummary as ActivitySummaryView } from "../../packages/gateway-protocol/src/schema/sessions-activity-summary.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
@@ -345,9 +346,13 @@ export function createSessionActivitySummaries(deps: {
           MODEL_TIMEOUT_MS,
         );
         const aborted = new Promise<never>((_, reject) => {
-          controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
-            once: true,
-          });
+          controller.signal.addEventListener(
+            "abort",
+            () => reject(toErrorObject(controller.signal.reason, "Activity recap cancelled")),
+            {
+              once: true,
+            },
+          );
         });
         try {
           const assertRequestCurrent = () => {

@@ -451,7 +451,9 @@ describe("runIsolatedCompletion", () => {
           },
         })),
       });
-      const error = await runIsolatedCompletion(isolatedRequest()).catch((error: unknown) => error);
+      const error = await runIsolatedCompletion(isolatedRequest()).catch(
+        (failure: unknown) => failure,
+      );
       expect(error).toMatchObject({ code: "output-rejected" });
       expect(resolveModelFallbackError(error)).toMatchObject(
         reason ? { kind: "failover", error: { reason } } : { kind: "unknown" },

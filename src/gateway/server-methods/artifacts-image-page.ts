@@ -80,7 +80,7 @@ export async function readArtifactImagePage(params: {
   const artifacts: ArtifactSummary[] = [];
   let next: Pick<ImageCursor, "beforeSeq" | "imageOffset"> | undefined;
   for (const message of page.messages.toReversed()) {
-    const seq = asOptionalRecord(asOptionalRecord(message)?.__openclaw)?.seq;
+    const seq = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.seq;
     if (typeof seq !== "number") {
       continue;
     }
@@ -120,7 +120,9 @@ export async function readArtifactImagePage(params: {
     });
     while (state.size > 128) {
       const oldest = state.keys().next().value;
-      if (oldest) state.delete(oldest);
+      if (oldest) {
+        state.delete(oldest);
+      }
     }
   }
   return {

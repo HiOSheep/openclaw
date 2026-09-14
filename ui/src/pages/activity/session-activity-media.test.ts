@@ -31,7 +31,9 @@ beforeEach(() => {
         );
       }
       disconnect() {
-        if (this.target) observers.delete(this.target);
+        if (this.target) {
+          observers.delete(this.target);
+        }
       }
     },
   );
@@ -70,7 +72,9 @@ it("waits for the viewport, limits concurrent discovery, and opens four thumbnai
   await vi.waitFor(() => expect(observers.size).toBe(4));
   expect(request).not.toHaveBeenCalled();
   const rows = [...container.querySelectorAll("openclaw-activity-session-media")];
-  for (const row of rows.slice(0, 3)) observers.get(row)?.(true);
+  for (const row of rows.slice(0, 3)) {
+    observers.get(row)?.(true);
+  }
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   expect(request).toHaveBeenCalledWith("artifacts.list", {
     sessionKey: "agent:main:images-0",
@@ -150,7 +154,9 @@ it("coalesces queued revisions without moving the session behind later arrivals"
     );
   show(1);
   await vi.waitFor(() => expect(observers.size).toBe(4));
-  for (const notify of observers.values()) notify(true);
+  for (const notify of observers.values()) {
+    notify(true);
+  }
   await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   show(2);
   await Promise.all(

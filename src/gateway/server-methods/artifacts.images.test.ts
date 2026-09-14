@@ -83,7 +83,9 @@ describe("bounded Activity image discovery", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
       await append([{ type: "image", url: "https://images.example.test/old.png" }]);
-      for (let index = 0; index < 40; index++) await append(`text-${index}`);
+      for (let index = 0; index < 40; index++) {
+        await append(`text-${index}`);
+      }
       const first = page(await list());
       expect(first.artifacts).toEqual([]);
       expect(first.nextCursor).toEqual(expect.any(String));

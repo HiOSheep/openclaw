@@ -5,10 +5,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { gitHubProfileUrl, type GitHubLinkTarget } from "./github-link-target.ts";
 
-export type GitHubPreviewDetails = Omit<
-  ControlUiGitHubPreview,
-  "createdAt" | "updatedAt" | "login"
-> & {
+type GitHubPreviewDetails = Omit<ControlUiGitHubPreview, "createdAt" | "updatedAt" | "login"> & {
   updatedAt?: string;
   login?: string;
 };

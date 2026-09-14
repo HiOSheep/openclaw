@@ -69,7 +69,9 @@ async function queued(state: ConnectionImages, key: string, run: () => Promise<v
         admit("full");
       }
     });
-    if (admission !== "run") return admission;
+    if (admission !== "run") {
+      return admission;
+    }
   } else {
     state.running++;
   }
@@ -78,8 +80,11 @@ async function queued(state: ConnectionImages, key: string, run: () => Promise<v
     return "run";
   } finally {
     const next = state.queue.shift();
-    if (next) next.admit("run");
-    else state.running--;
+    if (next) {
+      next.admit("run");
+    } else {
+      state.running--;
+    }
   }
 }
 
@@ -108,7 +113,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     // Visibility is required before transcript discovery; never fall back to an eager scan.
-    if (typeof IntersectionObserver === "undefined") return;
+    if (typeof IntersectionObserver === "undefined") {
+      return;
+    }
     this.observer = new IntersectionObserver(
       (entries) => {
         this.visible = entries.some((entry) => entry.isIntersecting);
@@ -170,7 +177,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
           owner.entries.set(key, this.entry);
           if (owner.entries.size > 128) {
             const oldest = owner.entries.keys().next().value;
-            if (oldest) owner.entries.delete(oldest);
+            if (oldest) {
+              owner.entries.delete(oldest);
+            }
           }
         }
       }
@@ -192,7 +201,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     const key = this.key;
     const sessionKey = this.sessionKey;
     const agentId = this.agentId;
-    if (!client || !owner || !entry || entry.pending) return;
+    if (!client || !owner || !entry || entry.pending) {
+      return;
+    }
     const current = () =>
       this.isConnected &&
       this.visible &&
@@ -217,7 +228,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
             limit: 4 - entry.images.length,
             ...(entry.cursor ? { cursor: entry.cursor } : {}),
           });
-          if (!current()) return;
+          if (!current()) {
+            return;
+          }
           entry.loaded = true;
           entry.cursor = result.nextCursor;
           entry.omitted ||= result.omittedOversized;
@@ -234,7 +247,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
               });
             }
           }
-          if (!entry.cursor) break;
+          if (!entry.cursor) {
+            break;
+          }
         }
       } catch {
         if (current()) {
@@ -261,7 +276,9 @@ class ActivitySessionMedia extends OpenClawLightDomElement {
     const owner = this.owner;
     const gateway = this.context.gateway;
     const { client, hello } = gateway.snapshot;
-    if (!entry || !owner || !client) return nothing;
+    if (!entry || !owner || !client) {
+      return nothing;
+    }
     const showMedia = entry.images.length > 0 || entry.error || entry.cursor || entry.omitted;
     const imageIdentity = this.imageIdentity;
     const agentId = this.agentId;

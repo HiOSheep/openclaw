@@ -310,15 +310,13 @@ function* filterSessionEntries(params: {
       yield;
     }
     const [key, entry] = pair;
-    if (matchesSearch && !matchesSearch(key, entry)) {
+    if (
+      (matchesSearch && !matchesSearch(key, entry)) ||
+      (activeCutoff !== undefined &&
+        (opts.sortBy === "activity" ? sessionActivityTimestamp(entry) : (entry.updatedAt ?? 0)) <
+          activeCutoff)
+    ) {
       continue;
-    }
-    if (activeCutoff !== undefined) {
-      const timestamp =
-        opts.sortBy === "activity" ? sessionActivityTimestamp(entry) : (entry.updatedAt ?? 0);
-      if (timestamp < activeCutoff) {
-        continue;
-      }
     }
     const effectiveOwner = projectSessionOwner(entry, identities, cfg, configuredAgentIds)?.actor;
     if (effectiveOwner) {
@@ -483,9 +481,7 @@ function* prepareSessionList(params: ListSessionsFromStoreParams, shouldYield: (
     restrictProfileReferences: params.entryFilter !== undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
     getRowContext:
-      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
-        ? getRowContext
-        : undefined,
+      hasSpawnedByFilter || normalizeOptionalString(opts.search) ? getRowContext : undefined,
     userProfileIdentityById,
     configuredAgentIds,
     involvingActorId: params.involvingActorId,
