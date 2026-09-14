@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -111,4 +112,98 @@ suite.define(() => {
       },
     );
   });
+  it.each([
+    { colorScheme: "light", reducedMotion: "no-preference" },
+    { colorScheme: "dark", reducedMotion: "no-preference" },
+    { colorScheme: "dark", reducedMotion: "reduce" },
+  ] as const)(
+    "keeps the themed shimmer and cached image stable ($colorScheme, $reducedMotion)",
+    async ({ colorScheme, reducedMotion }) => {
+      await suite.withPage(
+        { colorScheme, reducedMotion, viewport: { width: 1280, height: 900 } },
+        async ({ page }) => {
+          const ready = createDeferred();
+          let imageRequests = 0;
+          const source = "/api/chat/media/outgoing/agent%3Amain%3Amain/shimmer-proof/full";
+          await page.route("**/api/chat/media/outgoing/**", async (route) => {
+            imageRequests += 1;
+            await ready.promise;
+            await route.fulfill({
+              contentType: "image/svg+xml",
+              body: '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#57908b"/></svg>',
+            });
+          });
+          try {
+            await installMockGateway(page, {
+              historyMessages: Array.from({ length: 60 }, (_, index) => ({
+                role: index % 2 ? "assistant" : "user",
+                content:
+                  index === 57
+                    ? [
+                        {
+                          type: "image",
+                          url: source,
+                          alt: "Shimmer proof",
+                          width: 1200,
+                          height: 800,
+                        },
+                      ]
+                    : "Image conversation message " + index + ".",
+                timestamp: index + 1,
+                __openclaw: { id: "shimmer-message-" + index, seq: index + 1 },
+              })),
+            });
+            await page.goto(suite.server.baseUrl + "chat");
+            const frame = page.locator(
+              '.chat-bubble[data-entry-id="shimmer-message-57"] .chat-image-frame',
+            );
+            const skeleton = frame.locator(".chat-image-skeleton");
+            await skeleton.waitFor({ state: "visible" });
+            await waitForChatScrollIdle(page);
+            const before = await frame.boundingBox();
+            expect(before?.width).toBe(400);
+            expect(before?.height).toBeCloseTo(400 / 1.5, 1);
+            expect(await frame.textContent()).toBe("");
+            expect(await frame.locator("svg").count()).toBe(0);
+            const motion = await skeleton.evaluate((element) => {
+              const style = getComputedStyle(element, "::after");
+              return {
+                name: style.animationName,
+                duration: Number.parseFloat(style.animationDuration),
+                iterations: style.animationIterationCount,
+              };
+            });
+            expect(motion.name).toBe("shimmer");
+            if (reducedMotion === "reduce") {
+              expect(motion.duration).toBeLessThan(0.001);
+              expect(motion.iterations).toBe("1");
+            } else {
+              expect(motion.duration).toBe(2.4);
+              expect(motion.iterations).toBe("infinite");
+            }
+            ready.resolve();
+            const image = frame.locator("img");
+            await image.waitFor({ state: "visible" });
+            await image.evaluate((element) => (element as HTMLImageElement).decode());
+            await waitForChatScrollIdle(page);
+            expect(await frame.boundingBox()).toEqual(before);
+            expect(await skeleton.count()).toBe(0);
+            const loadedSource = await image.getAttribute("src");
+            const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+            await thread.hover();
+            await page.mouse.wheel(0, -100_000);
+            await expect.poll(() => frame.count()).toBe(0);
+            await page.locator(".chat-scroll-to-bottom").click();
+            await image.waitFor({ state: "visible" });
+            expect(await image.getAttribute("src")).toBe(loadedSource);
+            expect(await skeleton.count()).toBe(0);
+            await image.evaluate((element) => (element as HTMLImageElement).decode());
+            expect(imageRequests).toBe(1);
+          } finally {
+            ready.resolve();
+          }
+        },
+      );
+    },
+  );
 });

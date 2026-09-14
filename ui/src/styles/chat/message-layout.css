@@ -332,6 +332,17 @@
   background: color-mix(in srgb, var(--bg-muted) 45%, var(--bg));
 }
 
+.chat-image-skeleton.skeleton {
+  --skeleton-base: transparent;
+  --skeleton-highlight: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+  --skeleton-duration: 2.4s;
+
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
 .chat-image-frame--image > .chat-message-image-button {
   position: absolute;
   inset: 0;

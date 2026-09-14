@@ -310,7 +310,11 @@ class MessageImageResourceDirective extends AsyncDirective {
 
   private renderImagePlaceholder(image: ImageBlock, reason?: string) {
     if (reason === undefined) {
-      return this.renderImageFrame(image, nothing, true);
+      return this.renderImageFrame(
+        image,
+        html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`,
+        true,
+      );
     }
     return this.renderImageFrame(
       image,
