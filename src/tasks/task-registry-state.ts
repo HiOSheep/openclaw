@@ -264,27 +264,6 @@ export function rebuildRunIdIndex() {
   }
 }
 
-function rebuildOwnerKeyIndex() {
-  taskIdsByOwnerKey.clear();
-  for (const [taskId, task] of tasks.entries()) {
-    addOwnerKeyIndex(taskId, task);
-  }
-}
-
-function rebuildParentFlowIdIndex() {
-  taskIdsByParentFlowId.clear();
-  for (const [taskId, task] of tasks.entries()) {
-    addParentFlowIdIndex(taskId, task);
-  }
-}
-
-function rebuildRelatedSessionKeyIndex() {
-  taskIdsByRelatedSessionKey.clear();
-  for (const [taskId, task] of tasks.entries()) {
-    addRelatedSessionKeyIndex(taskId, task);
-  }
-}
-
 export function getTasksByRunId(runId: string): TaskRecord[] {
   const ids = taskIdsByRunId.get(runId.trim());
   if (!ids || ids.size === 0) {
@@ -420,14 +399,11 @@ export function restoreTaskRegistryOnce() {
     clearTaskRegistryMemory();
     for (const [taskId, task] of restored.tasks) {
       tasks.set(taskId, task);
+      addIndexes(task);
     }
     for (const [taskId, state] of restored.deliveryStates) {
       taskDeliveryStates.set(taskId, state);
     }
-    rebuildRunIdIndex();
-    rebuildOwnerKeyIndex();
-    rebuildParentFlowIdIndex();
-    rebuildRelatedSessionKeyIndex();
     taskRegistryRestoreState = { status: "ready" };
     markTaskRegistryProjectionRestored();
     for (const task of settledTasks) {
