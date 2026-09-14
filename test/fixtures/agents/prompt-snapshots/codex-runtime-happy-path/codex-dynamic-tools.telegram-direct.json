@@ -1215,7 +1215,7 @@
       },
       {
         "deferLoading": true,
-        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later announcement state, and neither proves target completion. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status \"no_reply\" is terminal, so do not wait for an announcement. watch:true: notice arrives when others later change target session.",
+        "description": "Run a visible session on this Gateway by sessionKey/label, or a configured local agent by agentId; sessionKey wins redundant label. A session identifies model context, not an external address; its reply may still announce through established delivery context. Accepted results report target admission as `targetDisposition: \"queued\"` or `\"steered\"`; `delivery.status` is only later announcement state, and neither proves target completion. mode:notify queues ephemeral context for the next turn without waking or starting work (bounded process memory, not a durable inbox). mode:steer injects guidance into an active supported run and never starts idle work; mode:followup starts or queues a later turn without steering. Omit mode for existing automatic routing. For an exact external destination, use `conversations_list` plus `conversations_send`/`conversations_turn`. Thread chats rejected: target parent channel. Missing configured-agent main created. Waits for reply when available; status \"no_reply\" is terminal, so do not wait for an announcement. watch:true: notice arrives when others later change target session.",
         "inputSchema": {
           "properties": {
             "agentId": {
@@ -1230,6 +1230,22 @@
             },
             "message": {
               "type": "string"
+            },
+            "mode": {
+              "anyOf": [
+                {
+                  "const": "notify",
+                  "type": "string"
+                },
+                {
+                  "const": "steer",
+                  "type": "string"
+                },
+                {
+                  "const": "followup",
+                  "type": "string"
+                }
+              ]
             },
             "sessionKey": {
               "type": "string"
@@ -1250,11 +1266,11 @@
       },
       {
         "deferLoading": true,
-        "description": "Background work: subagents, media gen, automation runs. list/cancel.",
+        "description": "Background work: list status, wait for selected taskIds to finish or need attention, or cancel a taskId. wait keeps this turn active; timeout does not cancel work or consume completion delivery.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["list", "cancel"],
+              "enum": ["list", "wait", "cancel"],
               "type": "string"
             },
             "recentMinutes": {
@@ -1264,6 +1280,20 @@
             "taskId": {
               "description": "Task id",
               "type": "string"
+            },
+            "taskIds": {
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "minItems": 1,
+              "type": "array"
+            },
+            "timeoutSeconds": {
+              "maximum": 60,
+              "minimum": 0,
+              "type": "integer"
             }
           },
           "type": "object"
@@ -1399,7 +1429,7 @@
     "name": "openclaw_direct",
     "tools": [
       {
-        "description": "End turn for announced child completion events. Collector runs require agents_wait instead. For an otherwise-silent interactive parent turn, acknowledgment can send a waiting reply.",
+        "description": "End this turn for pending child completion events; this is not a final-result submission. Return completed work normally. An unfinished subagent waiting for an incoming continuation must set waitFor:\"message\". Collector runs require agents_wait instead. acknowledgment can send a waiting reply for an otherwise-silent interactive parent.",
         "inputSchema": {
           "properties": {
             "acknowledgment": {
@@ -1408,6 +1438,11 @@
             },
             "message": {
               "description": "Private context for the resumed turn; not sent to the user.",
+              "type": "string"
+            },
+            "waitFor": {
+              "const": "message",
+              "description": "Explicitly pause an unfinished subagent until an incoming continuation message. Does not schedule a message or submit the final result.",
               "type": "string"
             }
           },
