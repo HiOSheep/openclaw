@@ -44,7 +44,7 @@ type ConfigWriteCoordinatorContext = {
   publish: () => void;
   run: <T>(task: () => Promise<T>) => Promise<T>;
   mutate: (task: () => void) => void;
-  trackLoad: (key: "config" | "schema", promise: Promise<unknown>) => Promise<void>;
+  runLoad: <T>(key: "config" | "schema", task: () => Promise<T>) => Promise<T>;
   resetLoads: () => void;
   resetConfigLoad: () => void;
   refreshConnectionState: (beforeApplySnapshot?: () => void) => Promise<boolean>;
@@ -66,7 +66,7 @@ export function createConfigWriteCoordinator({
   publish,
   run,
   mutate,
-  trackLoad,
+  runLoad,
   resetLoads,
   resetConfigLoad,
   refreshConnectionState,
@@ -546,9 +546,10 @@ export function createConfigWriteCoordinator({
       if (state.connected && state.client) {
         cancelAppliedRefresh();
         try {
-          const loaded = run(() => loadConfig(state, { discardPendingChanges: true }));
-          await trackLoad("config", loaded);
-          if (await loaded) {
+          const loaded = await runLoad("config", () =>
+            loadConfig(state, { discardPendingChanges: true }),
+          );
+          if (loaded) {
             clearAutoSaveDraftConnection();
           }
         } finally {
@@ -724,11 +725,7 @@ export function createConfigWriteCoordinator({
               mutationConnectionEpoch,
               task,
               options,
-              async () => {
-                const refresh = run(() => refreshConfigAfterMutation(state));
-                void trackLoad("config", refresh);
-                return await refresh;
-              },
+              () => runLoad("config", () => refreshConfigAfterMutation(state)),
               onSubmitted,
             ),
           (recoveryError) => ({

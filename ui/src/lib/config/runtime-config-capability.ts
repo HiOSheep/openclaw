@@ -1,3 +1,4 @@
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -81,8 +82,8 @@ export function createRuntimeConfigCapability(
     () => showToast({ message: t("configView.reloadBlocked") }),
   );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
-  let configLoad: Promise<void> | null = null;
-  let schemaLoad: Promise<void> | null = null;
+  let configLoad: Promise<unknown> | null = null;
+  let schemaLoad: Promise<unknown> | null = null;
   let disposed = false;
 
   const canCallConfigMethod = (
@@ -122,26 +123,31 @@ export function createRuntimeConfigCapability(
     task();
     publish();
   };
-  const trackLoad = (key: "config" | "schema", promise: Promise<unknown>): Promise<void> => {
-    const next = promise
-      .then(() => undefined)
-      .finally(() => {
-        if (key === "config" && configLoad === next) {
-          configLoad = null;
-        } else if (key === "schema" && schemaLoad === next) {
-          schemaLoad = null;
-        }
-      });
+  const runLoad = <T>(key: "config" | "schema", task: () => Promise<T>): Promise<T> => {
+    const completion = createDeferredCore<T>();
+    const next = completion.promise.finally(() => {
+      if (key === "config" && configLoad === next) {
+        configLoad = null;
+      } else if (key === "schema" && schemaLoad === next) {
+        schemaLoad = null;
+      }
+    });
     if (key === "config") {
       configLoad = next;
     } else {
       schemaLoad = next;
     }
+    // Subscribers can ensure missing config even when an offline load is a no-op.
+    // Register the flight before run publishes, while keeping busy state synchronous.
+    void run(task).then(completion.resolve, completion.reject);
     return next;
   };
-  const loadOnce = (key: "config" | "schema", task: () => Promise<unknown>): Promise<void> => {
+  const loadOnce = async (
+    key: "config" | "schema",
+    task: () => Promise<unknown>,
+  ): Promise<void> => {
     const current = key === "config" ? configLoad : schemaLoad;
-    return current ?? trackLoad(key, run(task));
+    await (current ?? runLoad(key, task));
   };
 
   const appliedRefresh = createAppliedConfigRefreshController({
@@ -154,13 +160,9 @@ export function createRuntimeConfigCapability(
       loadOnce("config", () => loadConfig(state, { background: true }, isCurrent)),
   });
   const refreshConnectionState = (beforeApplySnapshot?: () => void) => {
-    const config = run(() => loadConfig(state, { beforeApplySnapshot }));
-    void trackLoad("config", config);
+    const config = runLoad("config", () => loadConfig(state, { beforeApplySnapshot }));
     if (state.configSchemaVersion !== null && canLoadConfigSchema()) {
-      void trackLoad(
-        "schema",
-        run(() => loadConfigSchema(state)),
-      );
+      void runLoad("schema", () => loadConfigSchema(state));
     }
     return config;
   };
@@ -171,7 +173,7 @@ export function createRuntimeConfigCapability(
     publish,
     run,
     mutate,
-    trackLoad,
+    runLoad,
     resetLoads: () => {
       configLoad = null;
       schemaLoad = null;
@@ -232,19 +234,12 @@ export function createRuntimeConfigCapability(
     refresh: async (options) => {
       appliedRefresh.cancel();
       try {
-        await trackLoad(
-          "config",
-          run(() => loadConfig(state, options)),
-        );
+        await runLoad("config", () => loadConfig(state, options));
       } finally {
         appliedRefresh.reconcile();
       }
     },
-    refreshSchema: () =>
-      trackLoad(
-        "schema",
-        run(() => loadConfigSchema(state)),
-      ),
+    refreshSchema: () => runLoad("schema", () => loadConfigSchema(state)),
     patchForm: writes.patchForm,
     removeFormValue: writes.removeFormValue,
     setRaw: writes.setRaw,
