@@ -1,10 +1,43 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createGatewayHarness } from "./config-test-harness.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("runtime config load subscriptions", () => {
+  it("shares a background refresh with an editor ensuring its first snapshot", async () => {
+    const response = createDeferredCore<{
+      config: Record<string, unknown>;
+      hash: string;
+      valid: boolean;
+      issues: unknown[];
+    }>();
+    const request = vi.fn(() => response.promise);
+    const { gateway } = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    const pending: Promise<void>[] = [];
+    const unsubscribe = runtimeConfig.subscribe((state) => {
+      if (!state.configSnapshot && !state.configLoading) {
+        pending.push(runtimeConfig.ensureLoaded());
+      }
+    });
+    try {
+      const refreshed = runtimeConfig.refresh({ background: true });
+      expect(request).toHaveBeenCalledOnce();
+      expect(runtimeConfig.state.configLoading).toBe(false);
+      response.resolve({ config: {}, hash: "ready", valid: true, issues: [] });
+      await refreshed;
+      await Promise.all(pending);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("ready");
+      expect(request).toHaveBeenCalledOnce();
+    } finally {
+      response.resolve({ config: {}, hash: "ready", valid: true, issues: [] });
+      unsubscribe();
+      runtimeConfig.dispose();
+    }
+  });
+
   it.each(["ensureLoaded", "refresh"] as const)(
     "%s lets an offline editor ensure config without recursive notifications",
     async (action) => {

@@ -82,8 +82,7 @@ export function createRuntimeConfigCapability(
     () => showToast({ message: t("configView.reloadBlocked") }),
   );
   const listeners = new Set<(state: RuntimeConfigState) => void>();
-  let configLoad: Promise<unknown> | null = null;
-  let schemaLoad: Promise<unknown> | null = null;
+  const loads = new Map<"config" | "schema", Promise<unknown>>();
   let disposed = false;
 
   const canCallConfigMethod = (
@@ -126,17 +125,11 @@ export function createRuntimeConfigCapability(
   const runLoad = <T>(key: "config" | "schema", task: () => Promise<T>): Promise<T> => {
     const completion = createDeferredCore<T>();
     const next = completion.promise.finally(() => {
-      if (key === "config" && configLoad === next) {
-        configLoad = null;
-      } else if (key === "schema" && schemaLoad === next) {
-        schemaLoad = null;
+      if (loads.get(key) === next) {
+        loads.delete(key);
       }
     });
-    if (key === "config") {
-      configLoad = next;
-    } else {
-      schemaLoad = next;
-    }
+    loads.set(key, next);
     // Subscribers can ensure missing config even when an offline load is a no-op.
     // Register the flight before run publishes, while keeping busy state synchronous.
     void run(task).then(completion.resolve, completion.reject);
@@ -146,8 +139,7 @@ export function createRuntimeConfigCapability(
     key: "config" | "schema",
     task: () => Promise<unknown>,
   ): Promise<void> => {
-    const current = key === "config" ? configLoad : schemaLoad;
-    await (current ?? runLoad(key, task));
+    await (loads.get(key) ?? runLoad(key, task));
   };
 
   const appliedRefresh = createAppliedConfigRefreshController({
@@ -175,11 +167,10 @@ export function createRuntimeConfigCapability(
     mutate,
     runLoad,
     resetLoads: () => {
-      configLoad = null;
-      schemaLoad = null;
+      loads.clear();
     },
     resetConfigLoad: () => {
-      configLoad = null;
+      loads.delete("config");
     },
     refreshConnectionState,
     canCallConfigMethod,
