@@ -75,6 +75,7 @@ export interface ShellViewHost extends DevicePairSetupHost {
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly commandPaletteElement: OptionalCustomElement;
+  readonly debugOverlayElement: OptionalCustomElement;
   readonly custodianMinimizeRequestId: number;
   readonly desktopNavigationExpanded: boolean;
   readonly execApprovalElement: OptionalCustomElement;
@@ -399,7 +400,11 @@ export function renderApplicationShell(host: ShellViewHost) {
           ></openclaw-command-palette>`
         : nothing
     }
-    <openclaw-debug-overlay></openclaw-debug-overlay>
+    ${
+      isOptionalElementDefined(host.debugOverlayElement)
+        ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
+        : nothing
+    }
     ${
       !nativeEmbed && isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
         ? html`<openclaw-keyboard-shortcuts-dialog

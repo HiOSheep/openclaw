@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../components/command-palette-contract.ts";
 import {
+  DEBUG_OVERLAY_REQUEST_EVENT,
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -16,6 +17,7 @@ import {
 } from "./app-host.test-support.ts";
 import "./app-host.ts";
 import {
+  DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
 } from "./lazy-custom-element.ts";
@@ -308,6 +310,20 @@ describe("shell lazy events", () => {
         }),
       );
       expect(toggled).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("keeps the debug overlay out of startup until it is requested", async () => {
+    expect(customElements.get(DEBUG_OVERLAY_ELEMENT.tagName)).toBeUndefined();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellLifecycle &
+      HTMLElement;
+
+    await withConnectedShell(shell, async () => {
+      window.dispatchEvent(new CustomEvent(DEBUG_OVERLAY_REQUEST_EVENT));
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => {
+        expect(customElements.get(DEBUG_OVERLAY_ELEMENT.tagName)).toBeDefined();
+      });
     });
   });
 

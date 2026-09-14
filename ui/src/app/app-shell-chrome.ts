@@ -79,6 +79,7 @@ export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
+  readonly debugOverlayElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
   readonly commandPalette: CommandPaletteElement | undefined;
   readonly approvalOverlay: (HTMLElement & { show(): void; dialogOpen?: boolean }) | undefined;
@@ -471,15 +472,13 @@ export class ShellChromeOwner {
       host.closeNavDrawer({ restoreFocus: false });
     }
     const descriptor = lazyShellEvent(DEBUG_OVERLAY_REQUEST_EVENT, event);
-    const overlay = host.querySelector<DebugOverlayElement>("openclaw-debug-overlay");
+    const overlay = host.querySelector<DebugOverlayElement>(host.debugOverlayElement.tagName);
     if (overlay) {
       this.clearPendingLazyAction(descriptor);
       overlay.toggle();
       return;
     }
-    this.pendingLazyAction = descriptor;
-    persistLazyShellAction(descriptor);
-    host.requestUpdate();
+    this.requestLazyElement(host.debugOverlayElement, descriptor);
   };
 
   private readonly handleAssistantToggleBeforeMount = (event: Event): void => {
@@ -588,7 +587,7 @@ export class ShellChromeOwner {
     const host = this.host;
     const elements: Record<LazyShellEvent["eventType"], string> = {
       [COMMAND_PALETTE_OPEN_EVENT]: host.commandPaletteElement.tagName,
-      [DEBUG_OVERLAY_REQUEST_EVENT]: "openclaw-debug-overlay",
+      [DEBUG_OVERLAY_REQUEST_EVENT]: host.debugOverlayElement.tagName,
       [KEYBOARD_SHORTCUTS_REQUEST_EVENT]: KEYBOARD_SHORTCUTS_ELEMENT.tagName,
       [TERMINAL_PANEL_TOGGLE_EVENT]: host.terminalPanelElement.tagName,
       [BROWSER_PANEL_TOGGLE_EVENT]: host.browserPanelElement.tagName,
