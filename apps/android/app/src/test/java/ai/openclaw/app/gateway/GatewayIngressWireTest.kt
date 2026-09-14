@@ -544,7 +544,7 @@ class GatewayIngressWireTest {
 
           override fun onFailure(
             webSocket: WebSocket,
-            error: Throwable,
+            t: Throwable,
             response: Response?,
           ) {
             peer.closed.complete(Unit)
