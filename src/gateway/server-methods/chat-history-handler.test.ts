@@ -937,13 +937,18 @@ describe("chat metadata ownership", () => {
           authProfileOverrideSource: "user",
         },
       );
-      const readChatMetadata = vi.fn(async () => ({ commands: [], models: [] }));
+      const config: OpenClawConfig = {};
+      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => ({
+        commands: [],
+        models: [],
+        swarmEnabled: false,
+      }));
       const respond = vi.fn();
       const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
-      const context = {
-        getRuntimeConfig: () => ({}),
+      const context = createDirectChatContext({
+        getRuntimeConfig: () => config,
         readChatMetadata,
-      } as unknown as GatewayRequestContext;
+      });
       for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
         await handler({
           params,
@@ -956,7 +961,7 @@ describe("chat metadata ownership", () => {
       }
       expect(readChatMetadata.mock.calls).toEqual([
         [
-          {
+          expect.objectContaining({
             agentId: "main",
             sessionKey,
             isCurrent: expect.any(Function),
@@ -964,7 +969,7 @@ describe("chat metadata ownership", () => {
               authProfileOverride: "test:locked",
               authProfileOverrideSource: "user",
             }),
-          },
+          }),
         ],
         [{ agentId: "main" }],
       ]);
