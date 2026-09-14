@@ -637,21 +637,18 @@ export async function loadControlUiSessionPullRequests(
       status: "unavailable",
     };
   }
-  const {
-    mergedHeads,
-    workingBranchHasLivePullRequest,
-    referencesIncomplete: _referencesIncomplete,
-    ...snapshot
-  } = result;
+  const { mergedHeads, workingBranchHasLivePullRequest, referencesIncomplete, ...snapshot } =
+    result;
   const branch = workingBranchHasLivePullRequest
     ? undefined
     : await resolveSessionBranch(context, mergedHeads, deps, params.refresh === true);
   return {
     ...snapshot,
     ...(branch ? { branch } : {}),
-    ...(referencesUnavailable &&
-    (!context.branch || context.branch === context.defaultBranch) &&
-    snapshot.pullRequests.length === 0
+    ...(referencesIncomplete ||
+    (referencesUnavailable &&
+      (!context.branch || context.branch === context.defaultBranch) &&
+      snapshot.pullRequests.length === 0)
       ? { status: "unavailable" as const }
       : {}),
   };
