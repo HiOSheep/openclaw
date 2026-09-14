@@ -1,5 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
-import type { MarkdownHumanMentionToken } from "./markdown-human-mentions.ts";
+
+export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
 
 type MarkdownCodeBlockChrome = "copy" | "none";
 type MarkdownCodeBlockInteraction = "interactive" | "static";

@@ -2,10 +2,8 @@ import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MarkdownIt, Token } from "markdown-it";
 import { findMarkdownCodeSpans } from "../../../packages/markdown-core/src/reasoning-tags.js";
 import { readHumanMentions } from "../lib/chat/human-mentions.ts";
-import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
+import type { MarkdownHumanMentionToken, MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
-
-export type MarkdownHumanMentionToken = { marker: string; profileId: string; label: string };
 
 /** Protect selected labels before Markdown/line-ending normalization changes source offsets. */
 export function prepareMarkdownHumanMentions(source: string, value: readonly HumanMention[]) {
