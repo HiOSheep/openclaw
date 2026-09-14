@@ -172,7 +172,7 @@ const execFile = vi.fn((...args: unknown[]) => {
 });
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
-const serviceEnvSnapshot = captureEnv([
+const fixtureEnvSnapshot = captureEnv([
   ...SUPERVISOR_HINT_ENV_VARS,
   "OPENCLAW_COMPATIBILITY_HOST_VERSION",
   "OPENCLAW_UPDATE_RUN_HANDOFF",
@@ -180,6 +180,8 @@ const serviceEnvSnapshot = captureEnv([
   "OPENCLAW_SERVICE_KIND",
   GATEWAY_SERVICE_RUNTIME_PID_ENV,
   ...GATEWAY_SERVICE_SELECTOR_ENV_KEYS,
+  "NPM_CONFIG_GLOBALCONFIG",
+  "npm_config_globalconfig",
 ]);
 
 vi.mock("@clack/prompts", () => ({
@@ -824,6 +826,8 @@ describe("update-cli", () => {
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
   );
+  const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
+  fsSync.writeFileSync(globalNpmConfig, "");
   const profileStateDir = (profile = "default") =>
     path.join(
       expectDefined(process.env.HOME, "isolated test home"),
@@ -2065,15 +2069,11 @@ describe("update-cli", () => {
     // Clear the helper's state selector below so HOME and profile overrides keep their semantics.
     const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
     tempHome = await createTempHomeEnv("openclaw-update-cli-home-");
+    // Fresh homes must not repeatedly discover the host's global npm policy.
+    process.env.NPM_CONFIG_GLOBALCONFIG = globalNpmConfig;
+    process.env.npm_config_globalconfig = globalNpmConfig;
     const executorTmp = tempDirs.make("update-cli-owner-");
     absentServicePort = await getFreePort();
-    const gatewayEntrypoint = await import("../daemon/gateway-entrypoint.js");
-    const actualGatewayEntrypoint = await vi.importActual<
-      typeof import("../daemon/gateway-entrypoint.js")
-    >("../daemon/gateway-entrypoint.js");
-    vi.mocked(gatewayEntrypoint.resolveGatewayInstallEntrypoint).mockImplementation(
-      actualGatewayEntrypoint.resolveGatewayInstallEntrypoint,
-    );
     delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
     delete process.env.OPENCLAW_SERVICE_MARKER;
     delete process.env.OPENCLAW_SERVICE_KIND;
@@ -2353,7 +2353,7 @@ describe("update-cli", () => {
   });
 
   afterAll(async () => {
-    serviceEnvSnapshot.restore();
+    fixtureEnvSnapshot.restore();
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
