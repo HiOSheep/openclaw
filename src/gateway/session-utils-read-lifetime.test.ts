@@ -14,9 +14,12 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
   "rejects a retained metadata read after %s",
   async (change) => {
     await withOpenClawTestState({ label: "metadata-read-owner" }, async (state) => {
-      const original = state.path("original.sqlite");
-      const replacement = state.path("replacement.sqlite");
-      const alias = state.path("selected.sqlite");
+      const originalDirectory = state.statePath("original");
+      const replacementDirectory = state.statePath("replacement");
+      const aliasDirectory = state.statePath("selected");
+      const original = state.statePath("original", "catalog.sqlite");
+      const replacement = state.statePath("replacement", "catalog.sqlite");
+      const alias = state.statePath("selected", "catalog.sqlite");
       const sessionKey = "agent:main:saved";
       for (const storePath of [original, replacement]) {
         await upsertSessionEntryCore(
@@ -24,7 +27,7 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
           { sessionId: "identical-session", updatedAt: 1 },
         );
       }
-      fs.symlinkSync(original, alias);
+      fs.symlinkSync(originalDirectory, aliasDirectory, "junction");
       const config = {
         agents: { entries: { main: { workspace: state.workspaceDir } } },
         session: { store: alias },
@@ -41,8 +44,8 @@ it.each(["alias replacement", "cold-store close", "same-file reopen"] as const)(
         expect(read.entry?.sessionId).toBe("identical-session");
         expect(read.isCurrentAtResponse()).toBe(true);
         if (change === "alias replacement") {
-          fs.unlinkSync(alias);
-          fs.symlinkSync(replacement, alias);
+          fs.rmSync(aliasDirectory, { recursive: true });
+          fs.symlinkSync(replacementDirectory, aliasDirectory, "junction");
         } else {
           await closeOpenClawAgentDatabaseByPathAsync(read.readSource!.path);
           if (change === "same-file reopen") {
