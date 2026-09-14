@@ -85,9 +85,7 @@ suite.define(() => {
         },
       });
       await inspector.getByText("Waiting for children", { exact: true }).waitFor();
-      await expect
-        .poll(() => notice.getAttribute("aria-label"))
-        .toContain("Waiting — paused for a dependency or external event.");
+      await expect.poll(() => notice.getAttribute("aria-label")).toContain("Waiting for children");
       expect(await notice.locator(".chat-reading-indicator").count()).toBe(0);
       await inspector.getByText("2 children pending", { exact: true }).waitFor();
       expect(await inspector.getByText("Current tool", { exact: true }).count()).toBe(0);
@@ -131,9 +129,7 @@ suite.define(() => {
         task: { ...task, updatedAt: now + 3, execution: { state: "finished" } },
       });
       await inspector.getByText("Execution finished", { exact: true }).waitFor();
-      await expect
-        .poll(() => notice.getAttribute("aria-label"))
-        .toContain("Execution finished — task settlement is still pending.");
+      await expect.poll(() => notice.getAttribute("aria-label")).toContain("Execution finished");
       expect(await notice.locator(".chat-reading-indicator").count()).toBe(0);
       expect(
         await inspector.getByRole("button", { name: "Stop Review release evidence" }).count(),
@@ -153,7 +149,7 @@ suite.define(() => {
       };
       await gateway.emitGatewayEvent("task", { action: "upserted", task: completed });
       await inspector.getByText("Queued for parent", { exact: true }).waitFor();
-      const resultReadyDescription = "Result ready — waiting for delivery to the parent.";
+      const resultReadyDescription = "Result ready — Queued for parent";
       await expect.poll(() => notice.getAttribute("aria-label")).toContain(resultReadyDescription);
       const tooltip = notice.locator("..").locator("wa-tooltip[open] .tooltip-content");
       await notice.hover();
@@ -161,6 +157,10 @@ suite.define(() => {
       expect(await tooltip.textContent()).toContain(resultReadyDescription);
       await page.keyboard.press("Escape");
       await tooltip.waitFor({ state: "detached" });
+      await notice
+        .locator("..")
+        .locator("wa-tooltip .tooltip-content")
+        .waitFor({ state: "hidden" });
       await page.mouse.move(1, 1);
       expect(
         await inspector.getByRole("button", { name: "Stop Review release evidence" }).count(),
@@ -174,7 +174,7 @@ suite.define(() => {
         task: { ...completed, deliveryStatus: "delivered" },
       });
       await inspector.getByText("Delivered to parent", { exact: true }).waitFor();
-      const deliveredDescription = "Delivered — the result reached the parent.";
+      const deliveredDescription = "Completed — Delivered to parent";
       await expect.poll(() => notice.getAttribute("aria-label")).toContain(deliveredDescription);
       await page.keyboard.press("Tab");
       await notice.focus();

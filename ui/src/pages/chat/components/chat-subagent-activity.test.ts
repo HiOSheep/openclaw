@@ -138,108 +138,108 @@ describe("subagent activity rows", () => {
       title: "  Layout review  ",
       label: "Layout review",
       status: "running" as const,
-      description: "Running — working on this task.",
+      description: "Running",
       moving: true,
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "completed" as const,
-      description: "Completed — finished successfully.",
+      description: "Completed",
     },
     {
       title: "",
       label: "Subagent",
       status: "running" as const,
-      description: "Running — working on this task.",
+      description: "Running",
       moving: true,
     },
     {
       title: undefined,
       label: "Subagent",
       status: "running" as const,
-      description: "Running — working on this task.",
+      description: "Running",
       moving: true,
     },
     {
       title: " \n ",
       label: "Subagent",
       status: "failed" as const,
-      description: "Failed — the task ended with an error.",
+      description: "Failed",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "queued" as const,
-      description: "Queued — waiting to start.",
+      description: "Queued",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "cancelled" as const,
-      description: "Cancelled — stopped before completion.",
+      description: "Cancelled",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "timed_out" as const,
-      description: "Timed out — reached its time limit.",
+      description: "Timed out",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "running" as const,
       execution: { state: "waiting" as const },
-      description: "Waiting — paused for a dependency or external event.",
+      description: "Waiting",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "running" as const,
       execution: { state: "unknown" as const },
-      description: "Activity unknown — current execution details are unavailable.",
+      description: "Activity unknown",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "running" as const,
       execution: { state: "finished" as const },
-      description: "Execution finished — task settlement is still pending.",
+      description: "Execution finished",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "running" as const,
       execution: { state: "queued" as const },
-      description: "Queued — waiting to start.",
+      description: "Queued",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "completed" as const,
       deliveryStatus: "session_queued" as const,
-      description: "Result ready — waiting for delivery to the parent.",
+      description: "Result ready — Queued for parent",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "completed" as const,
       deliveryStatus: "pending" as const,
-      description: "Result ready — waiting for delivery to the parent.",
+      description: "Result ready — Waiting to send to parent",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "completed" as const,
       deliveryStatus: "delivered" as const,
-      description: "Delivered — the result reached the parent.",
+      description: "Completed — Delivered to parent",
     },
     {
       title: "Layout review",
       label: "Layout review",
       status: "completed" as const,
       deliveryStatus: "failed" as const,
-      description: "Delivery failed — the result could not reach the parent.",
+      description: "Completed — Delivery failed · result retained",
       warning: true,
     },
   ])(
@@ -366,7 +366,7 @@ describe("subagent activity rows", () => {
       container
         .querySelector('[data-subagent-task-id="recent-subagent"]')
         ?.getAttribute("aria-label"),
-    ).toContain("Completed — finished successfully.");
+    ).toContain("Completed");
     expect(container.textContent).not.toContain("Wrong requester");
     expect(container.textContent).not.toContain("Too old");
     expect(container.querySelector(".chat-tasks-status__link")?.textContent?.trim()).toBe(
@@ -442,7 +442,7 @@ describe("subagent activity rows", () => {
     renderCurrent();
     expect(
       container.querySelector(".chat-subagent-activity__row")?.getAttribute("aria-label"),
-    ).toContain("Cancelled — stopped before completion.");
+    ).toContain("Cancelled");
     expect(container.textContent).not.toContain("Editing the final report");
     expect(container.textContent).not.toContain("Outdated progress");
     expect(container.textContent).not.toContain("read_file");

@@ -8,7 +8,11 @@ import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { isActiveTask, sortTasks, taskTimestampMs } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
-import { backgroundTaskIsExecuting } from "./chat-background-tasks-shared.ts";
+import {
+  backgroundTaskDeliveryLabel,
+  backgroundTaskIsExecuting,
+  backgroundTaskStatusLabel,
+} from "./chat-background-tasks-shared.ts";
 
 const SUBAGENT_ACTIVITY_LIMIT = 5;
 const SUBAGENT_ACTIVITY_TERMINAL_RETENTION_MS = 60_000;
@@ -67,42 +71,6 @@ export function deriveSubagentActivity(params: {
     taskIds: new Set(eligible.map((task) => task.id)),
     nextExpiryAt,
   };
-}
-
-function subagentStatusDescription(task: TaskSummary): string {
-  if (isActiveTask(task)) {
-    if (task.execution?.state === "waiting") {
-      return t("chat.backgroundTasks.subagentActivity.waitingDescription");
-    }
-    if (task.execution?.state === "unknown") {
-      return t("chat.backgroundTasks.subagentActivity.unknownDescription");
-    }
-    if (task.execution?.state === "finished") {
-      return t("chat.backgroundTasks.subagentActivity.executionFinishedDescription");
-    }
-    if (task.execution?.state === "queued") {
-      return t("chat.backgroundTasks.subagentActivity.queuedDescription");
-    }
-  } else if (task.status === "completed") {
-    if (task.deliveryStatus === "pending" || task.deliveryStatus === "session_queued") {
-      return t("chat.backgroundTasks.subagentActivity.resultReadyDescription");
-    }
-    if (task.deliveryStatus === "delivered") {
-      return t("chat.backgroundTasks.subagentActivity.deliveredDescription");
-    }
-    if (task.deliveryStatus === "failed" || task.deliveryStatus === "parent_missing") {
-      return t("chat.backgroundTasks.subagentActivity.deliveryFailedDescription");
-    }
-  }
-  const keys = {
-    queued: "chat.backgroundTasks.subagentActivity.queuedDescription",
-    running: "chat.backgroundTasks.subagentActivity.runningDescription",
-    completed: "chat.backgroundTasks.subagentActivity.completedDescription",
-    failed: "chat.backgroundTasks.subagentActivity.failedDescription",
-    cancelled: "chat.backgroundTasks.subagentActivity.cancelledDescription",
-    timed_out: "chat.backgroundTasks.subagentActivity.timedOutDescription",
-  } as const;
-  return t(keys[task.status]);
 }
 
 function subagentActivitySnippet(task: TaskSummary): string | undefined {
@@ -165,7 +133,9 @@ function renderSubagentActivityRow(
     : undefined;
   const title = task.title?.trim();
   const label = title || t("chat.backgroundTasks.subagentActivity.untitled");
-  const statusDescription = subagentStatusDescription(task);
+  const statusLabel = backgroundTaskStatusLabel(task);
+  const deliveryLabel = backgroundTaskDeliveryLabel(task);
+  const statusDescription = deliveryLabel ? `${statusLabel} — ${deliveryLabel}` : statusLabel;
   const content = html`
     ${renderSubagentActivityIndicator(task)}
     <span class="chat-subagent-activity__label">${label}</span>
