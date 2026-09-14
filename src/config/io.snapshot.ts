@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -246,6 +247,8 @@ export async function readConfigFileSnapshotInternal(
       env: deps.env,
       allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     });
+    const deferredPluginMigrations =
+      context.options.deferredPluginMigrations ?? readDeferredPluginMigrations({ env: deps.env });
     const validated = await deps.measure("config.snapshot.read.validate", () =>
       validateConfigObjectWithPlugins(validationConfigRaw, {
         ...pathResolution,
@@ -253,6 +256,7 @@ export async function readConfigFileSnapshotInternal(
         loadPluginMetadataSnapshot: pluginMetadata.load,
         sourceRaw: effectiveParsed,
         preservedLegacyRootKeys: context.options.preservedLegacyRootKeys,
+        deferredPluginMigrations,
       }),
     );
     if (!validated.ok) {
@@ -291,6 +295,7 @@ export async function readConfigFileSnapshotInternal(
           runtimeConfig: coerceConfig(effectiveConfigRaw),
           hash: snapshotHash,
           issues: validated.issues,
+          deferredPluginMigrations,
           warnings: [...validated.warnings, ...envVarWarnings],
           resolutionFacts: readResolution.resolutionFacts,
           legacyIssues,
@@ -377,6 +382,7 @@ export async function readConfigFileSnapshotInternal(
             hash: snapshotHash,
             issues: [],
             warnings: [...validated.warnings, ...envVarWarnings],
+            deferredPluginMigrations,
             resolutionFacts: readResolution.resolutionFacts,
             legacyIssues: [],
           }),

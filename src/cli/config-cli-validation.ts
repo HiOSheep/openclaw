@@ -2,6 +2,7 @@ import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-c
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import type { ConfigFileSnapshot } from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
+import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { visitConfigValueTree } from "../config/io.read-helpers.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
@@ -18,6 +19,7 @@ import {
   collectUnsupportedSecretRefPolicyIssues,
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -92,6 +94,7 @@ export async function strictlyValidateConfigSnapshotForCli(
   const validated = validateConfigObjectRawWithPlugins(snapshot.sourceConfig, {
     semanticValidation: "strict",
     pluginMetadataSnapshot,
+    deferredPluginMigrations: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig),
   });
   const issues = validated.ok
     ? await collectConfigSecretProviderErrors({ config: snapshot.runtimeConfig })
@@ -277,10 +280,12 @@ function selectDryRunRefsForResolution(params: { refs: SecretRef[]; allowExecInD
 function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  deferredPluginMigrations?: readonly DeferredPluginMigration[],
 ): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(config, {
     semanticValidation: "strict",
     pluginMetadataSnapshot,
+    deferredPluginMigrations,
   });
   if (validated.ok) {
     return [];
@@ -294,8 +299,13 @@ function collectStrictConfigErrors(
 export function assertStrictConfigForMutation(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+  deferredPluginMigrations?: readonly DeferredPluginMigration[],
 ): void {
-  const errors = collectStrictConfigErrors(config, pluginMetadataSnapshot);
+  const errors = collectStrictConfigErrors(
+    config,
+    pluginMetadataSnapshot,
+    deferredPluginMigrations,
+  );
   if (errors.length === 0) {
     return;
   }
@@ -376,6 +386,7 @@ export async function validateConfigMutation(params: {
   configPath: string;
   unchanged: boolean;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
 }): Promise<{ kind: "dry-run"; result: ConfigSetDryRunResult } | { kind: "unchanged" | "write" }> {
   const { config, operations, options, pluginMetadataSnapshot } = params;
   const policyIssues = formatConfigIssueLines(collectUnsupportedSecretRefPolicyIssues(config), "", {
@@ -405,7 +416,11 @@ export async function validateConfigMutation(params: {
       );
     }
     if (params.unchanged) {
-      assertStrictConfigForMutation(config, pluginMetadataSnapshot);
+      assertStrictConfigForMutation(
+        config,
+        pluginMetadataSnapshot,
+        params.deferredPluginMigrations,
+      );
       return { kind: "unchanged" };
     }
   }
@@ -446,7 +461,9 @@ export async function validateConfigMutation(params: {
   }
   errors.push(...providerErrors);
   if (requiresFullSchema) {
-    errors.push(...collectStrictConfigErrors(config, pluginMetadataSnapshot));
+    errors.push(
+      ...collectStrictConfigErrors(config, pluginMetadataSnapshot, params.deferredPluginMigrations),
+    );
   }
   if (checksRefs) {
     errors.push(

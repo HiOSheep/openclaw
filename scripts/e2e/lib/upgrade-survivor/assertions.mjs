@@ -39,6 +39,7 @@ const SCENARIOS = new Set([
   "codex-allowlist-survival",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "missing-configured-plugin-migration",
   "custom-plugin-siblings",
   "stale-source-plugin-shadow",
   "prerelease-plugin-registry",

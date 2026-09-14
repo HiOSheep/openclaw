@@ -9,7 +9,7 @@ import { createColdPluginFixture } from "../plugins/test-helpers/cold-plugin-fix
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   formatStartupPluginVerificationFailure,
-  runStartupUpgradeConvergence,
+  runDoctorPluginConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
 import { runPostCorePluginConvergence } from "./doctor/shared/post-core-plugin-convergence.js";
 
@@ -51,11 +51,11 @@ describe.each(["startup", "repair"] as const)("%s consent inventory", (first) =>
   afterEach(() => npmInstall.mockReset());
 
   async function converge(
-    cfg: Parameters<typeof runStartupUpgradeConvergence>[0]["cfg"],
+    cfg: Parameters<typeof runDoctorPluginConvergence>[0]["cfg"],
     env: NodeJS.ProcessEnv,
   ) {
     if (first === "startup") {
-      expect(await runStartupUpgradeConvergence({ cfg, env })).toEqual({
+      expect(await runDoctorPluginConvergence({ cfg, env })).toEqual({
         blockingDiagnostic: null,
         quarantinedPlugins: [],
       });

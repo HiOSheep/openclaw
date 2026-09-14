@@ -1,4 +1,5 @@
 // Loads plugin doctor contracts from manifest-owned metadata.
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
@@ -44,6 +45,20 @@ import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./publi
 export { collectRelevantDoctorPluginIds } from "./doctor-contract-relevance.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
+
+const deferredPluginMigrations = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/** A prepared Doctor generation excludes unavailable owners from every migration surface. */
+export function withDeferredPluginDoctorMigrations<T>(
+  pluginIds: readonly string[],
+  run: () => T,
+): T {
+  return deferredPluginMigrations.run(new Set(pluginIds), run);
+}
+
+export function isPluginDoctorMigrationDeferred(pluginId: string): boolean {
+  return deferredPluginMigrations.getStore()?.has(pluginId) === true;
+}
 
 type PluginDoctorContractSurface = keyof PluginManifestDoctorContract;
 
@@ -154,6 +169,9 @@ function loadPluginDoctorContractEntry(
   record: PluginManifestRegistryRecord,
   surface: PluginDoctorContractSurface,
 ): PluginDoctorContractEntry | null {
+  if (isPluginDoctorMigrationDeferred(record.id)) {
+    return null;
+  }
   const declaration = record.doctorContract;
   // Declarations gate loading only; modules remain authoritative, while absence preserves loading.
   if (declaration && !declaresPluginDoctorContractSurface(declaration, surface)) {
@@ -215,6 +233,7 @@ function filterPluginDoctorRecordsByScope(
     : null;
   return records.filter(
     (record) =>
+      !deferredPluginMigrations.getStore()?.has(record.id) &&
       !(
         scopedPluginIds &&
         !scopedPluginIds.has(record.id) &&
@@ -246,6 +265,7 @@ function resolvePluginDoctorContracts(params: {
   const installedPluginIds = new Set(records.map((record) => record.id));
   for (const { channelId, pluginId } of GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA) {
     if (
+      deferredPluginMigrations.getStore()?.has(pluginId) ||
       (!Object.hasOwn(params.config?.channels ?? {}, channelId) &&
         !Object.hasOwn(params.config?.plugins?.entries ?? {}, pluginId)) ||
       ownedChannels.has(channelId) ||
@@ -396,16 +416,19 @@ export function listPluginDoctorStateMigrationEntries(params?: {
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
   validateDeclarations?: boolean;
+  onInspectedPlugin?: (pluginId: string) => void;
 }): PluginDoctorStateMigrationEntry[] {
   return loadPluginDoctorStateMigrationEntries(
     resolvePluginDoctorStateMigrationRecords(params ?? {}),
     params?.validateDeclarations,
+    params?.onInspectedPlugin,
   );
 }
 
 function loadPluginDoctorStateMigrationEntries(
   records: readonly PluginManifestRegistryRecord[],
   validateDeclarations = true,
+  onInspectedPlugin?: (pluginId: string) => void,
 ): PluginDoctorStateMigrationEntry[] {
   const entries: PluginDoctorStateMigrationEntry[] = [];
   for (const record of records) {
@@ -432,6 +455,7 @@ function loadPluginDoctorStateMigrationEntries(
       );
     }
     if (modern?.stateMigrations.length) {
+      onInspectedPlugin?.(record.id);
       for (const migration of modern.stateMigrations) {
         entries.push({
           pluginId: modern.pluginId,
@@ -455,6 +479,7 @@ function loadPluginDoctorStateMigrationEntries(
     if (!detector) {
       continue;
     }
+    onInspectedPlugin?.(record.id);
     entries.push({
       pluginId: record.id,
       channelIds: record.channels,
@@ -493,6 +518,9 @@ function filterPluginDoctorStateMigrationRecords(
   const records: PluginManifestRegistryRecord[] = [];
   const normalizedConfig = normalizePluginsConfig(config?.plugins);
   for (const record of candidates) {
+    if (deferredPluginMigrations.getStore()?.has(record.id)) {
+      continue;
+    }
     const channelOwner = record.channels.length > 0;
     // Config repair intentionally includes disabled plugins; channel state must never be moved
     // after its operator has disabled the owning plugin or every configured channel.

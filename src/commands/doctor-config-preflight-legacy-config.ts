@@ -6,6 +6,7 @@ import {
   parseConfigJson5,
   recoverConfigFromJsonRootSuffix,
   recoverConfigFromLastKnownGood,
+  type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
 import { resolveCanonicalConfigPath } from "../config/paths.js";
 import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
@@ -14,6 +15,23 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHomeDir } from "../utils.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 import type { planAutomaticConfigRepair } from "./doctor/shared/automatic-startup-config-repair.js";
+
+export function createDoctorLegacyConfigMigration(params: {
+  enabled: boolean;
+  measure: ConfigSnapshotReadMeasure;
+}): () => Promise<void> {
+  let complete = false;
+  return async () => {
+    if (complete || !params.enabled) {
+      return;
+    }
+    complete = true;
+    const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
+    if (changes.length > 0) {
+      note(changes.map((entry) => `- ${entry}`).join("\n"), "Doctor changes");
+    }
+  };
+}
 
 /** Repair active legacy bytes before considering an older backup. */
 export async function prepareDoctorConfigRecovery(params: {
@@ -62,7 +80,7 @@ export async function prepareDoctorConfigRecovery(params: {
   return { snapshotRead, activeConfigRepair };
 }
 
-export async function maybeMigrateLegacyConfig(): Promise<string[]> {
+async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
   if (!home) {

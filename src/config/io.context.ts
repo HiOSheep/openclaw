@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { classifyOtelGrpcMigrationOwnership } from "../commands/doctor/shared/include-migration-ownership.js";
 import { applyLegacyDoctorMigrations } from "../commands/doctor/shared/legacy-config-compat.js";
+import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -12,6 +13,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
+import { preserveDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { retainGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import { resolveConfigWidePluginMetadataSnapshot } from "./io.plugin-metadata.js";
@@ -197,11 +199,19 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       }
       // Recovery is a migration boundary, not runtime compatibility: the canonical Doctor
       // registry owns historical shapes before current-schema validation and any disk write.
+      const deferredPluginMigrations =
+        options.deferredPluginMigrations ?? readDeferredPluginMigrations({ env: deps.env });
       const migrated = applyLegacyDoctorMigrations(candidate.parsed, {
         authoredRaw: candidate.parsed,
         resolvedRaw: originalResolution.resolvedConfigRaw,
       });
-      const authoredCandidate = migrated.next ?? candidate.parsed;
+      const authoredCandidate = migrated.next
+        ? preserveDeferredPluginMigrationConfig({
+            sourceConfig: candidate.parsed,
+            nextConfig: migrated.next,
+            pending: deferredPluginMigrations,
+          })
+        : candidate.parsed;
       const candidateEnv = cloneEnvWithPlatformSemantics(deps.env);
       const resolved = resolveConfigIncludesForRead(authoredCandidate, configPath, {
         ...deps,
@@ -220,6 +230,7 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
         loadPluginMetadataSnapshot: pluginMetadata.load,
         sourceRaw: authoredCandidate,
         preservedLegacyRootKeys: options.preservedLegacyRootKeys,
+        deferredPluginMigrations,
       });
       if (!validated.ok) {
         const issueSummary = formatConfigIssueSummary(validated.issues.slice(0, 3)) ?? "";

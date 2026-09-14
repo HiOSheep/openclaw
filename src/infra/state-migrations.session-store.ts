@@ -19,6 +19,7 @@ import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectRelevantDoctorPluginIds,
+  isPluginDoctorMigrationDeferred,
   listPluginDoctorSessionStoreAgentIds,
 } from "../plugins/doctor-contract-registry.js";
 import {
@@ -30,8 +31,12 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { readDeferredPluginMigrations } from "./deferred-plugin-migrations.js";
+import {
+  deferredPluginSessionStoreIds,
+  preserveDeferredPluginSessionSource,
+} from "./deferred-plugin-session-sources.js";
 import { readFileWindowFullySync } from "./file-read.js";
-import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { isWithinDir } from "./path-safety.js";
 import {
@@ -43,6 +48,10 @@ import {
   type SessionEntryLike,
 } from "./state-migrations.fs.js";
 import { saveLegacySessionStore } from "./state-migrations.legacy-session-store.js";
+import {
+  resolveSessionStoreAliasPlan,
+  sessionStorePathsMatch,
+} from "./state-migrations.session-store-paths.js";
 import {
   isLegacyGroupKey,
   isSurfaceGroupKey,
@@ -606,6 +615,7 @@ export async function migrateOrphanedSessionKeys(params: {
   const scope = params.cfg.session?.scope as SessionScope | undefined;
   const storeConfig = params.cfg.session?.store;
   const persistedStoreOwner = resolvePersistedSessionStoreOwner(params.cfg);
+  const pendingPluginMigrations = readDeferredPluginMigrations({ env });
   const persistedStoreAgentId =
     persistedStoreOwner.kind === "configured" ? persistedStoreOwner.agentId : undefined;
   const persistedStorePath =
@@ -683,6 +693,18 @@ export async function migrateOrphanedSessionKeys(params: {
   }
 
   for (const [mappedStorePath, storeAgentIds] of storeMap) {
+    if (
+      [...storeAgentIds].some((agentId) =>
+        preserveDeferredPluginSessionSource({
+          cfg: params.cfg,
+          env,
+          target: { agentId, storePath: mappedStorePath },
+          pending: pendingPluginMigrations,
+        }),
+      )
+    ) {
+      continue;
+    }
     const storePaths = storeAliasCandidates.get(mappedStorePath) ?? new Set([mappedStorePath]);
     // An unknown relationship may have grouped a readable store behind an
     // inaccessible pathname. Read from a usable alias so the group still gets
@@ -823,6 +845,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     };
   }
   const now = params.now ?? (() => Date.now());
+  const pending = readDeferredPluginMigrations({ env });
   const stateDir = resolveStateDir(env);
   const storeConfig = params.cfg.session?.store;
   const pluginAgentIds =
@@ -909,6 +932,15 @@ export async function migrateLegacyAcpSessionMetadata(params: {
 
   for (const { target, agentIds, aliasCandidates } of storeGroups) {
     const storePath = target.storePath;
+    if (deferredPluginSessionStoreIds({ target, pending }).some(isPluginDoctorMigrationDeferred)) {
+      continue;
+    }
+    const preserveSource = preserveDeferredPluginSessionSource({
+      cfg: params.cfg,
+      env,
+      target,
+      pending,
+    });
     const storeAliases = resolveSessionStoreAliasPlan(storePath, aliasCandidates);
     const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
       sessionStorePathsMatch(storePath, pluginTarget.storePath),
@@ -1004,7 +1036,9 @@ export async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
     try {
-      await saveSessionStoreStrict(storePath, normalized);
+      if (!preserveSource) {
+        await saveSessionStoreStrict(storePath, normalized);
+      }
       changes.push(
         `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
       );
@@ -1099,123 +1133,6 @@ function resolveStorePathFromTemplate(
     return path.resolve(expand(template.replaceAll("{agentId}", agentId)));
   }
   return path.resolve(expand(template));
-}
-
-type SessionStorePathRelationship = "same" | "different" | "unknown";
-
-function resolveSessionStorePathRelationship(
-  left: string,
-  right: string,
-): SessionStorePathRelationship {
-  if (left === right) {
-    return "same";
-  }
-  try {
-    return sameFileIdentity(
-      fs.statSync(left, { bigint: true }),
-      fs.statSync(right, { bigint: true }),
-    )
-      ? "same"
-      : "different";
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return "unknown";
-    }
-    const resolvedLeft = resolvePathThroughExistingParents(left);
-    const resolvedRight = resolvePathThroughExistingParents(right);
-    if (resolvedLeft === undefined || resolvedRight === undefined) {
-      return "unknown";
-    }
-    return resolvedLeft === resolvedRight ? "same" : "different";
-  }
-}
-
-function sessionStorePathsMatch(left: string, right: string): boolean {
-  // Ownership checks must fail closed: an inaccessible path may still alias the
-  // readable store, so preserve shared-owner policy until identity is known.
-  return resolveSessionStorePathRelationship(left, right) !== "different";
-}
-
-function resolvePathThroughExistingParents(filePath: string): string | undefined {
-  const resolvedPath = path.resolve(filePath);
-  const suffix = [path.basename(resolvedPath)];
-  let parentPath = path.dirname(resolvedPath);
-  while (true) {
-    try {
-      return path.join(fs.realpathSync.native(parentPath), ...suffix);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ENOENT" && code !== "ENOTDIR") {
-        return undefined;
-      }
-      const nextParent = path.dirname(parentPath);
-      if (nextParent === parentPath) {
-        return undefined;
-      }
-      suffix.unshift(path.basename(parentPath));
-      parentPath = nextParent;
-    }
-  }
-}
-
-function sessionStorePathIsFinalSymlink(storePath: string): boolean {
-  try {
-    return fs.lstatSync(storePath).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-function sessionStorePathsHaveDistinctEntries(left: string, right: string): boolean {
-  if (left === right) {
-    return false;
-  }
-  try {
-    // Replacing a final-component symlink splits it from its target. Parent
-    // symlink spellings are safe because both names still address one entry.
-    if (fs.lstatSync(left).isSymbolicLink() || fs.lstatSync(right).isSymbolicLink()) {
-      return true;
-    }
-    // Hard links resolve to distinct pathnames and split on replacement.
-    return fs.realpathSync.native(left) !== fs.realpathSync.native(right);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      return true;
-    }
-    const resolvedLeft = resolvePathThroughExistingParents(left);
-    const resolvedRight = resolvePathThroughExistingParents(right);
-    return resolvedLeft === undefined || resolvedLeft !== resolvedRight;
-  }
-}
-
-function resolveSessionStoreAliasPlan(
-  storePath: string,
-  candidatePaths: Iterable<string>,
-): SessionStoreAliasPlan {
-  let hasDistinctEntries = false;
-  let hasFinalSymlink = sessionStorePathIsFinalSymlink(storePath);
-  let hasUnresolvedIdentity = false;
-  for (const candidatePath of candidatePaths) {
-    const relationship = resolveSessionStorePathRelationship(storePath, candidatePath);
-    if (relationship === "different") {
-      continue;
-    }
-    if (relationship === "unknown") {
-      hasUnresolvedIdentity = true;
-      continue;
-    }
-    hasFinalSymlink ||= sessionStorePathIsFinalSymlink(candidatePath);
-    if (sessionStorePathsHaveDistinctEntries(storePath, candidatePath)) {
-      hasDistinctEntries = true;
-    }
-  }
-  return {
-    hasDistinctAliases: hasFinalSymlink || hasDistinctEntries || hasUnresolvedIdentity,
-    hasFinalSymlink,
-    hasUnresolvedIdentity,
-  };
 }
 
 export function mergeSessionStoreAliasPlans(

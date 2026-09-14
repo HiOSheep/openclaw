@@ -217,6 +217,9 @@ export async function readConfigFileSnapshot(
   const pluginValidation =
     options.pluginValidation ?? (options.skipPluginValidation ? "skip" : undefined);
   return await createConfigIO({
+    ...(options.deferredPluginMigrations
+      ? { deferredPluginMigrations: options.deferredPluginMigrations }
+      : {}),
     ...(options.measure ? { measure: options.measure } : {}),
     ...(options.observe === false ? { observe: false } : {}),
     ...(options.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),
@@ -236,6 +239,7 @@ export async function readConfigFileSnapshotWithPluginMetadata(
   options?: Pick<
     ConfigSnapshotReadOptions,
     | "allowCurrentPluginMetadata"
+    | "deferredPluginMigrations"
     | "allowSuspiciousRecovery"
     | "isolateEnv"
     | "lowerPrecedenceEnv"
@@ -246,6 +250,9 @@ export async function readConfigFileSnapshotWithPluginMetadata(
   >,
 ): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> {
   return await createConfigIO({
+    ...(options?.deferredPluginMigrations
+      ? { deferredPluginMigrations: options.deferredPluginMigrations }
+      : {}),
     ...(options?.measure ? { measure: options.measure } : {}),
     ...(options?.observe === false ? { observe: false } : {}),
     ...(options?.isolateEnv ? { env: cloneEnvWithPlatformSemantics(process.env) } : {}),

@@ -1,6 +1,8 @@
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../plugins/config-state.js";
 import type { PluginPayloadSmokeFailure } from "../plugins/payload-verification.js";
 import {
@@ -10,6 +12,7 @@ import {
 } from "../plugins/runtime-degraded-state.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
+import { shouldDeferConfiguredPluginInstallRepair } from "./doctor/shared/update-phase.js";
 
 type StartupPluginVerificationDiagnostic = {
   kind: "plugin-verification";
@@ -19,6 +22,7 @@ type StartupPluginVerificationDiagnostic = {
 type StartupPluginConvergenceResult = {
   blockingDiagnostic: StartupPluginVerificationDiagnostic | null;
   quarantinedPlugins: DegradedPlugin[];
+  deferredPlugins?: DeferredPluginMigration[];
 };
 
 async function planStartupPluginVerification(params: {
@@ -76,7 +80,7 @@ function formatStartupPluginSmokeFailure(failure: PluginPayloadSmokeFailure): st
   })}. Run \`openclaw update repair\` to retry plugin repair.`;
 }
 
-export async function runStartupUpgradeConvergence(params: {
+export async function runDoctorPluginConvergence(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   measure?: ConfigSnapshotReadMeasure;
@@ -84,6 +88,24 @@ export async function runStartupUpgradeConvergence(params: {
   const plan = await planStartupPluginVerification(params);
   if (!plan.required) {
     return { blockingDiagnostic: null, quarantinedPlugins: [] };
+  }
+  const { inspectPluginMigrationAvailability } =
+    await import("./doctor/shared/plugin-migration-availability.js");
+  if (shouldDeferConfiguredPluginInstallRepair(params.env)) {
+    const payloads = await verifyStartupPluginPayloads(params, plan.installRecords);
+    const pending = await inspectPluginMigrationAvailability({
+      ...params,
+      installRecords: plan.installRecords,
+      deferInstallation: true,
+    });
+    return {
+      ...payloads,
+      deferredPlugins: [
+        ...new Map(
+          [...(payloads.deferredPlugins ?? []), ...pending].map((entry) => [entry.pluginId, entry]),
+        ).values(),
+      ],
+    };
   }
   const { runPostCorePluginConvergence } = await measureDoctorConfigPreflightStep(
     "plugin-convergence-import",
@@ -121,6 +143,33 @@ export async function runStartupUpgradeConvergence(params: {
     failures: convergence.smokeFailures,
   });
   const quarantinedPluginIds = new Set(quarantinedPlugins.map((plugin) => plugin.pluginId));
+  const deferredPlugins = new Map(
+    (
+      await inspectPluginMigrationAvailability({
+        ...params,
+        installRecords: convergence.installRecords,
+        deferInstallation: false,
+      })
+    ).map((pending) => [pending.pluginId, pending]),
+  );
+  for (const warning of convergence.warnings) {
+    if (warning.pluginId && !quarantinedPluginIds.has(warning.pluginId)) {
+      deferredPlugins.set(warning.pluginId, {
+        ...deferredPlugins.get(warning.pluginId),
+        pluginId: warning.pluginId,
+        reason: warning.reason,
+        command: "openclaw update repair",
+      });
+    }
+  }
+  for (const plugin of quarantinedPlugins) {
+    deferredPlugins.set(plugin.pluginId, {
+      ...deferredPlugins.get(plugin.pluginId),
+      pluginId: plugin.pluginId,
+      reason: plugin.diagnostic.detail,
+      command: "openclaw update repair",
+    });
+  }
   const nonBlockingWarningKeys = new Set(
     convergence.smokeFailures
       .filter(
@@ -132,6 +181,9 @@ export async function runStartupUpgradeConvergence(params: {
   );
   const blockingMessages = convergence.warnings
     .filter((warning) => {
+      if (warning.pluginId && deferredPlugins.has(warning.pluginId)) {
+        return false;
+      }
       if (
         warning.kind === "repair" &&
         warning.pluginId &&
@@ -151,6 +203,7 @@ export async function runStartupUpgradeConvergence(params: {
         ? { kind: "plugin-verification", messages: blockingMessages }
         : null,
     quarantinedPlugins,
+    ...(deferredPlugins.size > 0 ? { deferredPlugins: [...deferredPlugins.values()] } : {}),
   };
 }
 
@@ -163,6 +216,13 @@ export async function refreshStartupPluginQuarantine(params: {
   if (!plan.required) {
     return { blockingDiagnostic: null, quarantinedPlugins: [] };
   }
+  return verifyStartupPluginPayloads(params, plan.installRecords);
+}
+
+async function verifyStartupPluginPayloads(
+  params: Parameters<typeof runDoctorPluginConvergence>[0],
+  records: Record<string, PluginInstallRecord>,
+): Promise<StartupPluginConvergenceResult> {
   const { runActivePluginPayloadSmokeCheck } = await measureDoctorConfigPreflightStep(
     "plugin-payload-verification-import",
     () => import("../plugins/active-payload-verification.js"),
@@ -173,7 +233,7 @@ export async function refreshStartupPluginQuarantine(params: {
     () =>
       runActivePluginPayloadSmokeCheck({
         cfg: params.cfg,
-        records: plan.installRecords,
+        records,
         env: params.env,
       }),
     params.measure,
@@ -214,14 +274,19 @@ function mapStartupPluginQuarantineRefresh(params: {
       isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
   );
   return {
-    blockingDiagnostic:
-      blockingFailures.length > 0
-        ? {
-            kind: "plugin-verification",
-            messages: blockingFailures.map(formatStartupPluginSmokeFailure),
-          }
-        : null,
+    blockingDiagnostic: null,
     quarantinedPlugins,
+    deferredPlugins: [
+      ...blockingFailures,
+      ...quarantinedPlugins.map((plugin) => ({
+        pluginId: plugin.pluginId,
+        detail: plugin.diagnostic.detail,
+      })),
+    ].map((failure) => ({
+      pluginId: failure.pluginId,
+      reason: failure.detail,
+      command: "openclaw update repair",
+    })),
   };
 }
 

@@ -1,8 +1,8 @@
 // Validates normalized OpenClaw config and reports user-facing errors.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../agents/agent-scope.js";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { listChannelIdsForOwnershipMigration } from "../plugins/channel-presence-policy.js";
 import { normalizePluginsConfig, normalizePluginId } from "../plugins/config-state.js";
@@ -21,6 +21,7 @@ import {
   collectChannelSchemaMetadataWithOwnership,
 } from "./channel-config-metadata.js";
 import { resolveChannelSchemaSelection } from "./channel-schema-selection.js";
+import { omitDeferredPluginMigrationConfig } from "./deferred-plugin-migration-config.js";
 import { resolveConfigWidePluginManifestRegistry } from "./io.plugin-metadata.js";
 import { migrateLegacyContextBudgetConfig } from "./legacy.context-budget.js";
 import {
@@ -36,15 +37,15 @@ import { resolveSecretInputRef } from "./types.secrets.js";
 import {
   bundledChannelIds,
   collectChannelDmPolicyDependencyWarnings,
-  formatRawChannelConfigIssueMessage,
   hasChannelDmPolicyDependencyWarningCandidates,
   normalizeBundledChannelId,
 } from "./validation-channel-rules.js";
 import { collectHeartbeatOwnerWarnings, validateConfigObjectRaw } from "./validation-core.js";
 import { withConfigIssuePath } from "./validation-issues.js";
 import {
-  collectExplicitPluginReferences,
-  resolveExplicitPluginReferencePath,
+  createPluginRegistryConfigValidator,
+  formatChannelConfigIssueMessage,
+  resolveDeferredChannelConfigWarning,
   validateExplicitPluginConfig,
 } from "./validation-plugin-config.js";
 
@@ -67,6 +68,7 @@ type ValidateConfigWithPluginsParams = {
   ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
   sourceRaw?: unknown;
   preservedLegacyRootKeys?: readonly string[];
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
 };
 
 type RegistryInfo = {
@@ -137,7 +139,9 @@ function validateConfigObjectWithPluginMode(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
 ): ValidateConfigWithPluginsResult {
-  const copilotConfig = removeLegacyCopilotDiscovery(raw);
+  const copilotConfig = removeLegacyCopilotDiscovery(
+    omitDeferredPluginMigrationConfig(raw, params?.deferredPluginMigrations),
+  );
   const contextBudgetConfig = migrateLegacyContextBudgetConfig(copilotConfig).config;
   const migrated = migratePersistedImplicitMainRoster(contextBudgetConfig, {
     env: params?.env,
@@ -261,42 +265,19 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  const deferredPluginIds = new Set(
+    opts.deferredPluginMigrations?.map(({ pluginId }) => normalizePluginId(pluginId)),
+  );
   warnings.push(...collectHeartbeatOwnerWarnings(config));
   const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
-  const explicitPluginReferences = collectExplicitPluginReferences(raw);
-
-  const formatChannelConfigIssueMessage = (message: string, pluginId?: string): string => {
-    const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
-    return safePluginId
-      ? `invalid config for plugin ${safePluginId}: ${message}`
-      : formatRawChannelConfigIssueMessage(message);
-  };
 
   let compatPluginIds: ReadonlySet<string> | null = null;
-  let registryDiagnosticsPushed = false;
-
-  const pushRegistryDiagnostics = (registry: PluginManifestRegistry): void => {
-    if (registryDiagnosticsPushed) {
-      return;
-    }
-    registryDiagnosticsPushed = true;
-    for (const diag of registry.diagnostics) {
-      const explicitPath = diag.pluginId
-        ? resolveExplicitPluginReferencePath(explicitPluginReferences, diag.pluginId)
-        : undefined;
-      let issuePath = explicitPath ?? "plugins";
-      if (!diag.pluginId && diag.message.includes("plugin path not found")) {
-        issuePath = "plugins.load.paths";
-      }
-      const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
-      const issue = { path: issuePath, message: `${pluginLabel}: ${diag.message}` };
-      if (diag.level === "error" && (explicitPath || !diag.pluginId)) {
-        issues.push(issue);
-      } else {
-        warnings.push(issue);
-      }
-    }
-  };
+  const pushRegistryDiagnostics = createPluginRegistryConfigValidator({
+    raw,
+    deferredPluginIds,
+    issues,
+    warnings,
+  });
 
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
     if (compatPluginIds) {
@@ -642,6 +623,16 @@ function validateConfigObjectWithPluginsBase(
       if (!channelSchema?.schema) {
         continue;
       }
+      const deferredChannelWarning = resolveDeferredChannelConfigWarning({
+        channelId: trimmed,
+        schemaPluginId: channelSchema.pluginId,
+        deferredPluginIds,
+        registry: ensureLoadedRegistryInfo().registry,
+      });
+      if (deferredChannelWarning) {
+        warnings.push(deferredChannelWarning);
+        continue;
+      }
       // channelSchema.schema can come from an external plugin's channelConfigs.*.schema
       // (channel-config-metadata.ts merges every plugin origin, not just bundled), so it
       // is untrusted manifest input and must use the isolation path instead of the
@@ -728,6 +719,7 @@ function validateConfigObjectWithPluginsBase(
       registry,
       knownIds: ensureKnownIds(),
       normalizedPlugins: ensureNormalizedPlugins(),
+      deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,
       replacePluginEntryConfig,
