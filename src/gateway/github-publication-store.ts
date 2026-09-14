@@ -113,37 +113,45 @@ export function readSharedGitHubPublicationRequest(
         if (row.status === "published" || row.status === "failed") {
           return row;
         }
-      } else {
-        if (selector.idempotencyKey !== undefined) {
-          selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
-        }
-        // No shared receipt means there is no workspace evidence to qualify. Personal-only
-        // recovery must not depend on an unrelated shared workspace being available.
-        if (!executeSqliteQueryTakeFirstSync(db, selection.limit(1))) {
-          return undefined;
-        }
+      } else if (selector.idempotencyKey !== undefined) {
+        selection = selection.where("idempotency_key", "=", selector.idempotencyKey);
       }
-      const workspace = readSharedGitHubPublicationWorkspace(db, session, entry);
-      if (workspace?.kind !== "worktree") {
-        return undefined;
-      }
-      if (!tableExists(db, "github_publication_session_lifecycles")) {
-        if (executeSqliteQueryTakeFirstSync(db, selection.limit(1))) {
-          throw new Error("GitHub publication session binding is unavailable.");
-        }
-        return undefined;
-      }
-      const revision = entry.lifecycleRevision ?? null;
+      const hasLifecycle = tableExists(db, "github_publication_session_lifecycles");
       const ordered = selection
         .leftJoin("github_publication_session_lifecycles as lifecycle", (join) =>
           join
             .onRef("lifecycle.request_id", "=", "github_publication_requests.request_id")
             .on("lifecycle.publication_kind", "=", "shared"),
         )
+        .where((eb) =>
+          eb.or([
+            eb("lifecycle.request_id", "is not", null),
+            eb("github_publication_requests.status", "not in", ["published", "failed"]),
+          ]),
+        )
         .select(["lifecycle.request_id as lifecycle_request_id", "lifecycle.lifecycle_revision"])
         .orderBy("created_at_ms", "desc")
         .orderBy("github_publication_requests.request_id", "desc")
         .limit(64);
+      // Completed receipts can predate lifecycle bindings. They are unqualified history,
+      // not current workspace evidence; pending receipts still fail closed when unbound.
+      const candidate = hasLifecycle
+        ? executeSqliteQueryTakeFirstSync(db, ordered.limit(1))
+        : executeSqliteQueryTakeFirstSync(
+            db,
+            selection.where("status", "not in", ["published", "failed"]).limit(1),
+          );
+      if (!candidate) {
+        return undefined;
+      }
+      const workspace = readSharedGitHubPublicationWorkspace(db, session, entry);
+      if (workspace?.kind !== "worktree") {
+        return undefined;
+      }
+      if (!hasLifecycle) {
+        throw new Error("GitHub publication session binding is unavailable.");
+      }
+      const revision = entry.lifecycleRevision ?? null;
       let cursor: GitHubPublicationRow | undefined;
       for (;;) {
         const after = cursor;

@@ -96,6 +96,77 @@ describe("shared worktree receipt observation", () => {
     }
   });
 
+  it.each([
+    { missing: "table", status: "published" },
+    { missing: "row", status: "published" },
+    { missing: "table", status: "failed" },
+    { missing: "row", status: "failed" },
+  ] as const)(
+    "keeps legacy $status receipts as history with no lifecycle $missing",
+    async ({ missing, status }) => {
+      const coordinator = sharedPublicationCoordinator();
+      const row = insertSharedWorktreeReceipt("legacy", { createdAtMs: 2_000 });
+      if (status === "published") {
+        publishWorktree(row);
+      } else {
+        const claimed = claimGitHubPublicationExecution(row.request_id, "fixture-instance");
+        createGitHubPublicationExecutionStore("fixture-instance").complete(claimed, {
+          requestId: row.request_id,
+          status: "failed",
+          code: "github_rejected",
+          message: "GitHub rejected the publication.",
+          nextAction: "Inspect GitHub before starting a new publication.",
+        });
+      }
+      const database = openOpenClawStateDatabase();
+      // v2026.9.1 persisted these receipt fields without any lifecycle companion.
+      if (missing === "table") {
+        database.db.exec("DROP TABLE github_publication_session_lifecycles");
+      } else {
+        database.db
+          .prepare("DELETE FROM github_publication_session_lifecycles WHERE request_id = ?")
+          .run(row.request_id);
+      }
+      const databasePath = database.path;
+      closeOpenClawStateDatabaseForTest();
+      const bytes = await fs.readFile(databasePath);
+      const files = await fs.readdir(path.dirname(databasePath));
+      prohibitPublicationWork();
+      const observer = vi.fn();
+      const stop = onSessionLifecycleEvent(observer);
+      try {
+        expect(coordinator.latestShared(session)).toBeNull();
+        expect(coordinator.latestShared(session, row.idempotency_key)).toBeNull();
+        expect(coordinator.sharedStatus(session, row.request_id)?.result).toMatchObject({
+          requestId: row.request_id,
+          status,
+        });
+        expect(await fs.readFile(databasePath)).toEqual(bytes);
+        expect(await fs.readdir(path.dirname(databasePath))).toEqual(files);
+        expect(observer).not.toHaveBeenCalled();
+        expect(mocks.prepareIdentity).not.toHaveBeenCalled();
+        expect(mocks.runCommand).not.toHaveBeenCalled();
+      } finally {
+        stop();
+      }
+      const db = openOpenClawStateDatabase().db;
+      db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?").run(
+        "retired-owner",
+        "worktree-1",
+      );
+      expect(coordinator.latestShared(session)).toBeNull();
+      db.prepare("UPDATE worktrees SET owner_id = ? WHERE id = ?").run(SESSION_KEY, "worktree-1");
+      insertSharedWorktreeReceipt("current", { createdAtMs: 1_000 });
+      expect(coordinator.latestShared(session)?.result.requestId).toBe("current");
+      expect(
+        db
+          .prepare(
+            "SELECT request_id FROM github_publication_session_lifecycles WHERE request_id = ?",
+          )
+          .get(row.request_id),
+      ).toBeUndefined();
+    },
+  );
   it("orders by creation and request ID even when an older receipt is reported later, and recovers only the exact key", () => {
     const coordinator = sharedPublicationCoordinator();
     publishWorktree(insertSharedWorktreeReceipt("old", { createdAtMs: 1 }));
