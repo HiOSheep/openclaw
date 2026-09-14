@@ -666,10 +666,14 @@ export const cronHandlers: GatewayRequestHandlers = {
           }) &&
           cronJobIsVisible(job, cronVisibility, defaultAgentId) &&
           (!p.sessionKey ||
-            resolveCronJobBoundSessionKeys(job, {
+            (resolveCronJobBoundSessionKeys(job, {
               cfg: context.getRuntimeConfig(),
               defaultAgentId,
-            }).has(p.sessionKey));
+            }).has(p.sessionKey) &&
+              (parseAgentSessionKey(p.sessionKey) !== null ||
+                !p.sessionAgentId ||
+                normalizeAgentId(job.owner?.agentId ?? defaultAgentId) ===
+                  normalizeAgentId(p.sessionAgentId))));
       }
       let page: CronListPageResult;
       const finishPage = diagnostics?.startSourcePage();

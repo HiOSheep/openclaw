@@ -7,7 +7,7 @@ describe("resolveCronRouteData", () => {
     expect(resolveCronRouteData("?session=agent%3Aops%3Anight+watch&agent=ops")).toEqual({
       jobId: null,
       runId: null,
-      session: { sessionKey: "agent:ops:night watch", agentId: "ops" },
+      session: { sessionKey: "agent:ops:night watch", sessionAgentId: "ops" },
     });
     expect(resolveCronRouteData("?session=global")).toEqual({ jobId: null, runId: null });
     expect(resolveCronRouteData("?session=global&agent=ops&job=chosen")).toEqual({

@@ -210,6 +210,8 @@ class CronPage extends OpenClawLightDomElement {
       if (JSON.stringify(this.cron.cronSessionFilter) !== JSON.stringify(routeData.session)) {
         this.resetGatewayState(this.context.gateway.snapshot);
       }
+      this.listTab = "tasks";
+      this.detailTab = "settings";
       this.pendingRouteData = routeData.jobId || routeData.session ? routeData : null;
       this.routeJobRequested = false;
       this.highlightedRunId = null;

@@ -98,7 +98,12 @@ async function withCronStore(
   }
 }
 
-async function listScoped(context: GatewayRequestContext, offset = 0, sessionKey?: string) {
+async function listScoped(
+  context: GatewayRequestContext,
+  offset = 0,
+  sessionKey?: string,
+  client: GatewayClient | null = scopedClient(),
+) {
   const respond = vi.fn();
   await expectDefined(
     cronHandlers["cron.list"],
@@ -108,13 +113,13 @@ async function listScoped(context: GatewayRequestContext, offset = 0, sessionKey
     params: {
       includeDisabled: true,
       includeDeliveryPreviews: false,
-      ...(sessionKey ? { sessionKey } : {}),
+      ...(sessionKey ? { sessionKey, sessionAgentId: "ops" } : {}),
       sortBy: "name",
       limit: 1,
       offset,
     },
     context,
-    client: scopedClient(),
+    client,
     respond,
     isWebchatConnect: () => false,
   });
@@ -146,6 +151,11 @@ describe("cron.list scoped SQLite snapshots", () => {
         "job-0200",
       ]);
       expect((await listScoped(context, 0, "agent:ops:missing")).total).toBe(0);
+      // A user with inventory access also sees jobs run by another agent but bound here.
+      expect((await listScoped(context, 0, sessionKey, null)).total).toBe(3);
+      expect((await listScoped(context, 1, sessionKey, null)).jobs.map((job) => job.id)).toEqual([
+        "job-0001",
+      ]);
     });
   });
 

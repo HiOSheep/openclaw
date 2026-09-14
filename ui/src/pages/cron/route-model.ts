@@ -1,7 +1,7 @@
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
-  session?: { sessionKey: string; agentId: string };
+  session?: { sessionKey: string; sessionAgentId: string };
 } {
   const params = new URLSearchParams(search);
   const jobId = params.get("job")?.trim() || null;
@@ -10,7 +10,9 @@ export function resolveCronRouteData(search: string): {
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
-    ...(!jobId && sessionKey && agentId ? { session: { sessionKey, agentId } } : {}),
+    ...(!jobId && sessionKey && agentId
+      ? { session: { sessionKey, sessionAgentId: agentId } }
+      : {}),
   };
 }
 
