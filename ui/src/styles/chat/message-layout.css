@@ -326,7 +326,8 @@
 .chat-image-frame--image {
   display: block;
   flex: none;
-  width: min(100%, var(--chat-image-width));
+  /* A definite intrinsic width keeps fit-content user grids from collapsing. */
+  width: var(--chat-image-width);
   aspect-ratio: var(--chat-image-ratio);
   background: color-mix(in srgb, var(--bg-muted) 45%, var(--bg));
 }

@@ -12,7 +12,9 @@ const containers: HTMLElement[] = [];
 const subscribers: (() => void)[] = [];
 
 afterEach(() => {
-  for (const subscriber of subscribers.splice(0)) releaseChatMediaResourceSubscriber(subscriber);
+  for (const subscriber of subscribers.splice(0)) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
   for (const container of containers.splice(0)) {
     render(nothing, container);
     container.remove();
@@ -48,43 +50,54 @@ function svgResponse(width: number, height: number) {
 }
 
 describe.runIf(browserMode)("chat image loading geometry", () => {
-  it.each([
-    {
-      name: "landscape",
-      width: 1200,
-      height: 800,
-      pane: 500,
-      expectedWidth: 400,
-      expectedHeight: 400 / 1.5,
-    },
-    {
-      name: "portrait",
-      width: 800,
-      height: 1600,
-      pane: 500,
-      expectedWidth: 180,
-      expectedHeight: 360,
-    },
-    { name: "tiny image", width: 1, height: 1, pane: 500, expectedWidth: 160, expectedHeight: 160 },
-    {
-      name: "narrow pane",
-      width: 1200,
-      height: 800,
-      pane: 180,
-      expectedWidth: 180,
-      expectedHeight: 120,
-    },
-    {
-      name: "unknown dimensions",
-      width: undefined,
-      height: undefined,
-      pane: 500,
-      expectedWidth: 400,
-      expectedHeight: 400 / 1.5,
-    },
-  ])(
-    "keeps the $name frame and next message stationary through fetch, decode, and cache reuse",
-    async (scenario) => {
+  it.each(
+    [
+      {
+        name: "landscape",
+        width: 1200,
+        height: 800,
+        pane: 500,
+        expectedWidth: 400,
+        expectedHeight: 400 / 1.5,
+      },
+      {
+        name: "portrait",
+        width: 800,
+        height: 1600,
+        pane: 500,
+        expectedWidth: 180,
+        expectedHeight: 360,
+      },
+      {
+        name: "tiny image",
+        width: 1,
+        height: 1,
+        pane: 500,
+        expectedWidth: 160,
+        expectedHeight: 160,
+      },
+      {
+        name: "narrow pane",
+        width: 1200,
+        height: 800,
+        pane: 180,
+        expectedWidth: 180,
+        expectedHeight: 120,
+      },
+      {
+        name: "unknown dimensions",
+        width: undefined,
+        height: undefined,
+        pane: 500,
+        expectedWidth: 400,
+        expectedHeight: 400 / 1.5,
+      },
+    ].flatMap((scenario) =>
+      ["assistant", "user"].map((role) => ({ scenario, role, name: scenario.name })),
+    ),
+  )(
+    "keeps the $role $name frame and next message stationary through fetch, decode, and cache reuse",
+    async ({ scenario, role }) => {
       const container = mount(scenario.pane);
       const response = Promise.withResolvers<Response>();
       const fetchMock = vi.fn(() => response.promise);
@@ -101,9 +114,12 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const draw = () =>
         render(
           html`<style>
-              ${baseCss}${layoutCss}${messageCss}</style
-            >${renderMessageImages(images)}
-            <p data-next-message>Next message</p>`,
+              ${baseCss}${layoutCss}${messageCss}
+            </style>
+            <div class="chat-group ${role}" style="--chat-user-content-align: end">
+              ${renderMessageImages(images)}
+              <p data-next-message>Next message</p>
+            </div>`,
           container,
         );
       draw();
@@ -254,6 +270,67 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       );
     },
   );
+
+  it("anchors real image actions around tiny and tall previews", async () => {
+    const { page } = await import("vitest/browser");
+    await page.viewport(1280, 900);
+    const container = mount(500);
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(svgResponse(16, 16))
+        .mockResolvedValueOnce(svgResponse(420, 1800)),
+    );
+    const images = [
+      {
+        url: "/api/chat/media/outgoing/agent%3Amain%3Amain/tiny-actions/full",
+        width: 16,
+        height: 16,
+        alt: "Tiny generated image",
+      },
+      {
+        url: "/api/chat/media/outgoing/agent%3Amain%3Amain/tall-actions/full",
+        width: 420,
+        height: 1800,
+        alt: "Tall generated image",
+      },
+    ];
+    render(
+      html`<style>
+          ${baseCss}${layoutCss}${messageCss}
+        </style>
+        <div class="chat-group assistant">${renderMessageImages(images)}</div>`,
+      container,
+    );
+    await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(2));
+    await Promise.all([...container.querySelectorAll("img")].map((image) => image.decode()));
+    const frames = [...container.querySelectorAll<HTMLElement>(".chat-image-frame--managed")];
+    expect(frames[1]!.getBoundingClientRect().top).toBeGreaterThan(
+      frames[0]!.getBoundingClientRect().bottom,
+    );
+    for (const [index, expectedWidth] of [160, 84].entries()) {
+      const element = frames[index]!;
+      await page.getByAltText(images[index]!.alt, { exact: true }).hover();
+      for (const animation of element.getAnimations({ subtree: true })) {
+        animation.finish();
+      }
+      const frameRect = element.getBoundingClientRect();
+      const actionsRect = element.querySelector(".chat-image-actions")!.getBoundingClientRect();
+      expect(getComputedStyle(element, "::after").opacity).toBe("1");
+      expect(actionsRect.left).toBeGreaterThanOrEqual(frameRect.left);
+      expect(actionsRect.right).toBeLessThanOrEqual(frameRect.right);
+      expect(actionsRect.top).toBeGreaterThanOrEqual(frameRect.top);
+      expect(actionsRect.bottom).toBeLessThanOrEqual(frameRect.bottom);
+      expect(frameRect.bottom - actionsRect.bottom).toBeLessThanOrEqual(9);
+      expect(Number.parseFloat(getComputedStyle(element, "::after").width)).toBeCloseTo(
+        frameRect.width,
+        0,
+      );
+      expect(frameRect.width).toBeCloseTo(expectedWidth, 0);
+      expect(getComputedStyle(element).overflow).toBe("hidden");
+    }
+  });
 
   it("retains an explained image slot after a failed thumbnail fetch", async () => {
     const container = mount(500);
