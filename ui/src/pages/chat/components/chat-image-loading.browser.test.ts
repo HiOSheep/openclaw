@@ -1,5 +1,6 @@
 import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { renderAssistantAttachments } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
@@ -99,7 +100,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     "keeps the $role $name frame and next message stationary through fetch, decode, and cache reuse",
     async ({ scenario, role }) => {
       const container = mount(scenario.pane);
-      const response = Promise.withResolvers<Response>();
+      const response = createDeferred<Response>();
       const fetchMock = vi.fn(() => response.promise);
       vi.stubGlobal("fetch", fetchMock);
       const source = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
@@ -156,7 +157,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     "keeps a local %s slot through metadata authorization without a file card",
     async (kind) => {
       const container = mount(500);
-      const response = Promise.withResolvers<Response>();
+      const response = createDeferred<Response>();
       vi.stubGlobal(
         "fetch",
         vi.fn(() => response.promise),
@@ -225,7 +226,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const { page } = await import("vitest/browser");
       await page.viewport(viewport, 812);
       const container = mount(Math.min(700, viewport - 32));
-      const ready = Promise.withResolvers<void>();
+      const ready = createDeferred();
       vi.stubGlobal(
         "fetch",
         vi.fn(async () => {
@@ -334,7 +335,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
 
   it("retains an explained image slot after a failed thumbnail fetch", async () => {
     const container = mount(500);
-    const response = Promise.withResolvers<Response>();
+    const response = createDeferred<Response>();
     const fetchMock = vi
       .fn()
       .mockImplementationOnce(() => response.promise)
