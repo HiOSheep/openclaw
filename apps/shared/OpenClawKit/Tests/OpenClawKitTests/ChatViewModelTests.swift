@@ -12662,20 +12662,21 @@ struct ChatViewModelTests {
             onVerboseLevelChanged: { callbacks.values.append($0) })
 
         try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        try await waitUntil("main session finishes bootstrap") {
+            await MainActor.run { !vm.isLoading }
+        }
         await MainActor.run { vm.selectVerboseLevel("on") }
         try await waitUntil("first verbosity patch starts") {
             await patchCount.current() == 1
         }
         await MainActor.run { vm.switchSession(to: "other") }
         try await waitUntil("other session loads") {
-            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" }
+            await MainActor.run { vm.sessionKey == "other" && vm.sessionId == "sess-other" && !vm.isLoading }
         }
         await MainActor.run { vm.selectVerboseLevel("full") }
-        try await waitUntil("newer verbosity patch completes") {
-            let count = await patchCount.current()
-            let preferred = await MainActor.run { vm.preferredVerboseLevel }
-            return count == 2 && preferred == "full"
-        }
+        await vm.waitForPendingSessionSettings(in: "other")
+        #expect(await patchCount.current() == 2)
+        #expect(await MainActor.run { vm.preferredVerboseLevel } == "full")
 
         await firstPatchGate.open()
         await vm.waitForPendingSessionSettings(in: "main")
