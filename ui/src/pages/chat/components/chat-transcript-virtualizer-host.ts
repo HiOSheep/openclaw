@@ -521,6 +521,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.measureRowRefFor(key),
+          measureRows:
+            this.offsetState.scrollCommand?.target === "message" ||
+            this.offsetState.scrollCommand?.target === "index",
         });
       },
       () => {

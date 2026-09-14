@@ -645,13 +645,19 @@ openclaw-chat-page {
   width: 100%;
 }
 
-/* The virtualizer already bounds mounted rows. Keep those rows measurable so
-   compact layouts, jumps, and restored panes do not use skipped-content sizes.
-   flow-root includes child margins while browser flow preserves adjacency. */
+/* Browser flow preserves adjacency even when smooth scrolling skips a row's
+   measurement. flow-root includes child margins in each measured row. */
 .chat-virtual-row {
   position: relative;
   display: flow-root;
   width: 100%;
+  content-visibility: auto;
+}
+
+/* Message jumps need real mounted-row sizes before their target settles.
+   Native reader takeover restores ordinary overscan layout skipping. */
+.chat-thread-inner[data-measuring-rows] .chat-virtual-row {
+  content-visibility: visible;
 }
 
 .chat-virtual-row--first > :first-child {
