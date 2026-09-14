@@ -236,3 +236,25 @@ openclaw message poll --channel telegram --target -1001234567890:topic:42 \
 
   </Accordion>
 </AccordionGroup>
+
+## Cached message history
+
+Group prompts use the existing SQLite message cache instead of a separate
+in-memory history buffer. The automatic slice obeys `historyLimit` (including
+`0`) and a 16 KiB UTF-8 message budget; the current request is separate. The
+cache retains its existing 3000-entry, plugin-wide bound. Only independently
+admitted messages and successful bot replies qualify as ordinary history.
+Older cache values without admission provenance remain usable for explicit
+reply context, but are not promoted into automatic or tool-read history.
+
+The existing `message` tool supports Telegram `action: "read"` against the local
+message cache. Use `before` with a native Telegram message ID for exclusive
+backward paging and pass the returned `nextBefore` for the next page. `limit`
+defaults to 50 and is capped at 100; each result is also capped at 32 KiB of
+UTF-8 JSON. Oversized message text may be marked `truncated`. Media keeps its
+native `telegram:file/...` reference; private download paths are not returned.
+
+Agent reads require host-provided session and conversation context and stay in
+the current account, chat, and topic. Current sender policy and session reset
+boundaries still apply. This is cached history, not arbitrary Telegram history
+hydration. Channel posts and business direct-message topics are not supported.

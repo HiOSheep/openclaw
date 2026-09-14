@@ -589,6 +589,105 @@ describe("telegram message cache", () => {
     expect(reloaded?.promptContextProjectionMarker).toEqual({ kind: "valid", projection: marker });
   });
 
+  it("persists admission only for independently admitted messages, never embedded replies", async () => {
+    const memory = createMemoryStore();
+    const cache = cacheFor(memory.bucketKey, memory.store);
+    const reply = message(9100, "Nora", { text: "reply-only" });
+    await record(cache, message(9101, "Nora", { text: "admitted", reply_to_message: reply }));
+    await cache.markHistoryEligible({ accountId: "default", chatId: 7, messageIds: ["9101"] });
+    resetCache();
+    const hydrated = cacheFor(memory.bucketKey, memory.store);
+    expect((await get(hydrated, "9101"))?.historyEligible).toBe(true);
+    expect((await get(hydrated, "9100"))?.historyEligible).toBeUndefined();
+    // The reply remains reply-only even after its embedding parent is evicted.
+    for (const key of memory.entries.keys()) {
+      if (key.endsWith(":9101")) {
+        memory.entries.delete(key);
+      }
+    }
+    resetCache();
+    const orphaned = cacheFor(memory.bucketKey, memory.store);
+    expect((await get(orphaned, "9100"))?.historyEligible).toBeUndefined();
+    await record(orphaned, reply);
+    await orphaned.markHistoryEligible({ accountId: "default", chatId: 7, messageIds: ["9100"] });
+    resetCache();
+    expect((await get(cacheFor(memory.bucketKey, memory.store), "9100"))?.historyEligible).toBe(
+      true,
+    );
+  });
+
+  it("does not infer admission from legacy rows or provider-supplied fields", async () => {
+    const memory = createMemoryStore();
+    const cache = cacheFor(memory.bucketKey, memory.store);
+    await record(cache, message(9102, "Nora", { text: "legacy", historyEligible: true }));
+    resetCache();
+    expect(
+      (await get(cacheFor(memory.bucketKey, memory.store), "9102"))?.historyEligible,
+    ).toBeUndefined();
+  });
+
+  it("does not expose admission when marking history fails durably", async () => {
+    const memory = createMemoryStore();
+    const cache = cacheFor(memory.bucketKey, memory.store);
+    await record(cache, message(9103, "Nora", { text: "not yet admitted" }));
+    const failing = cacheFor(memory.bucketKey, {
+      ...memory.store,
+      register: async () => {
+        throw new Error("mark failed");
+      },
+    });
+    await expect(
+      failing.markHistoryEligible({ accountId: "default", chatId: 7, messageIds: ["9103"] }),
+    ).rejects.toThrow("mark failed");
+    expect((await get(failing, "9103"))?.historyEligible).toBeUndefined();
+  });
+
+  it("retries failed cache hydration instead of marking an empty cache hydrated", async () => {
+    const memory = createMemoryStore();
+    const original = cacheFor(memory.bucketKey, memory.store);
+    await record(original, message(9124, "Nora", { text: "durable ambient" }));
+    resetCache();
+    let unavailable = true;
+    const cache = cacheFor(memory.bucketKey, {
+      ...memory.store,
+      async entries() {
+        if (unavailable) {
+          throw new Error("read unavailable");
+        }
+        return memory.store.entries();
+      },
+    });
+    await expect(recentBefore(cache, "9125")).rejects.toThrow("read unavailable");
+    unavailable = false;
+    await expect(recentBefore(cache, "9125")).resolves.toMatchObject([
+      { messageId: "9124", body: "durable ambient" },
+    ]);
+  });
+
+  it("reports an ambient write failure and can durably replay the same native message", async () => {
+    const memory = createMemoryStore();
+    let unavailable = true;
+    const cache = cacheFor(memory.bucketKey, {
+      ...memory.store,
+      async register(key, value) {
+        if (unavailable) {
+          throw new Error("write unavailable");
+        }
+        await memory.store.register(key, value);
+      },
+    });
+    const msg = message(9125, "Nora", { text: "retry this ambient message" });
+    await expect(record(cache, msg)).rejects.toThrow("write unavailable");
+    expect(memory.entries.size).toBe(0);
+    unavailable = false;
+    await record(cache, msg);
+    resetCache();
+    await expect(get(cacheFor(memory.bucketKey, memory.store), "9125")).resolves.toMatchObject({
+      body: "retry this ambient message",
+    });
+    expect(memory.entries.size).toBe(1);
+  });
+
   it("poisons projection provenance when its durable cache write fails", async () => {
     const bucketKey = `test:${process.pid}:${Date.now()}:${persistentStoreId++}`;
     const persistentStore: PersistentStore = {
@@ -602,7 +701,7 @@ describe("telegram message cache", () => {
     const cache = cacheFor(bucketKey, persistentStore);
     await expect(
       record(cache, message(9126, "Nora", { text: "Markerless context" })),
-    ).resolves.toMatchObject({ messageId: "9126" });
+    ).rejects.toThrow("state store unavailable");
 
     const marker = projection("assistant-persistence-failure");
     await expect(

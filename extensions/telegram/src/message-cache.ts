@@ -44,6 +44,7 @@ export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId
   messageId: string;
   resolvedMedia?: TelegramResolvedMedia;
   sourceMessage: Message;
+  historyEligible?: true;
   promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
   threadBinding?: TelegramMessageThreadBinding;
 };
@@ -60,10 +61,17 @@ type TelegramMessageCache = {
     msg: Message;
     botUserId?: number;
     promptContextProjection?: TelegramPromptContextProjection;
+    historyEligible?: true;
     /** Set only while recording an authenticated provider event or response. */
     providerObservedThread?: TelegramThreadSpec;
     threadId?: number;
   }) => Promise<TelegramCachedMessageNode>;
+  markHistoryEligible: (params: {
+    accountId: string;
+    chatId: string | number;
+    messageIds: readonly string[];
+    botUserId?: number;
+  }) => Promise<void>;
   recordResolvedMedia: (params: {
     accountId: string;
     botUserId?: number;
@@ -205,6 +213,7 @@ function normalizeMessageNode(
   msg: Message,
   params: {
     threadId?: number;
+    historyEligible?: true;
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
     resolvedMedia?: TelegramResolvedMedia;
     threadBinding?: TelegramMessageThreadBinding;
@@ -220,6 +229,7 @@ function normalizeMessageNode(
   const timestamp = resolveMessageTimestamp(msg);
   return {
     sourceMessage: msg,
+    ...(params.historyEligible ? { historyEligible: true as const } : {}),
     messageId: String(msg.message_id),
     sender: buildSenderName(msg) ?? "unknown sender",
     ...(msg.from?.id != null ? { senderId: String(msg.from.id) } : {}),
@@ -291,6 +301,7 @@ function normalizeMessageNodes(
   msg: Message,
   params: {
     threadId?: number;
+    historyEligible?: true;
     promptContextProjectionMarker?: TelegramPromptContextProjectionMarker;
     resolvedMedia?: TelegramResolvedMedia;
     threadBinding?: TelegramMessageThreadBinding;
@@ -321,6 +332,9 @@ function normalizeMessageNodes(
       observedBinding?.threadSpec.id === threadId ? observedBinding : undefined;
     const node = normalizeMessageNode(message, {
       ...(threadId !== undefined ? { threadId } : {}),
+      ...(mode === "authoritative" && params.historyEligible
+        ? { historyEligible: true as const }
+        : {}),
       ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
       ...(resolvedMedia ? { resolvedMedia } : {}),
       ...(matchingBinding ? { threadBinding: matchingBinding } : {}),
@@ -381,6 +395,9 @@ function parsePersistedCacheValue(key: string, value: unknown) {
       : undefined;
   const resolvedMedia = parseTelegramResolvedMedia(value.resolvedMedia);
   return normalizeMessageNodes(value.sourceMessage, {
+    ...(value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION && value.historyEligible === true
+      ? { historyEligible: true as const }
+      : {}),
     ...(threadId !== undefined ? { threadId } : {}),
     ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
     ...(threadBinding ? { threadBinding } : {}),
@@ -461,6 +478,9 @@ function mergeCachedMessageNode(
       ? existing.resolvedMedia
       : undefined;
   return normalizeMessageNode(sourceMessage, {
+    ...(incoming.historyEligible || existing.historyEligible
+      ? { historyEligible: true as const }
+      : {}),
     ...(threadId !== undefined ? { threadId } : {}),
     ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
     ...(threadBinding ? { threadBinding } : {}),
@@ -493,7 +513,7 @@ function resolveDefaultPersistentStore(): TelegramMessageCachePersistentStore | 
     });
   } catch (error) {
     logVerbose(`telegram: failed to open message cache plugin state: ${String(error)}`);
-    return undefined;
+    throw error;
   }
 }
 
@@ -536,11 +556,12 @@ async function hydrateMessageCacheBucket(
     return;
   }
   bucket.hydratePromise = (async () => {
-    let storeEntries: Array<{ key: string; value: unknown }> = [];
+    let storeEntries: Array<{ key: string; value: unknown }>;
     try {
       storeEntries = (await bucket.persistentStore?.entries()) ?? [];
     } catch (error) {
       logVerbose(`telegram: failed to hydrate message cache from plugin state: ${String(error)}`);
+      throw error;
     }
     const scopedStoreEntries = scopeKey
       ? storeEntries.filter(({ key }) => key.startsWith(`${scopeKey}:`))
@@ -585,6 +606,7 @@ async function persistCachedNode(params: {
     await persistentStore.register(params.key, {
       version: TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
       sourceMessage: params.node.sourceMessage,
+      ...(params.node.historyEligible ? { historyEligible: true as const } : {}),
       ...(params.botUserId !== undefined ? { botUserId: params.botUserId } : {}),
       ...(promptContextProjection ? { promptContextProjection } : {}),
       ...(params.node.resolvedMedia ? { resolvedMedia: params.node.resolvedMedia } : {}),
@@ -602,8 +624,9 @@ async function persistCachedNode(params: {
             ? marker.projection.transcriptMessageId
             : marker.transcriptMessageId,
       };
-      throw error;
     }
+    // The ingress spool owns retry; acknowledging an unpersisted ambient message loses context.
+    throw error;
   }
 }
 
@@ -673,6 +696,7 @@ export function createTelegramMessageCache(params?: {
       chatId,
       msg,
       promptContextProjection,
+      historyEligible,
       providerObservedThread,
       threadId,
     }) => {
@@ -680,6 +704,7 @@ export function createTelegramMessageCache(params?: {
       const threadBinding = createTelegramMessageThreadBinding(providerObservedThread);
       const observations = normalizeMessageNodes(msg, {
         threadId,
+        ...(historyEligible ? { historyEligible } : {}),
         ...(promptContextProjection && isTelegramMessageFromCurrentBot(msg, botUserId)
           ? {
               promptContextProjectionMarker: {
@@ -708,6 +733,19 @@ export function createTelegramMessageCache(params?: {
         });
       }
       return recordedEntry;
+    },
+    markHistoryEligible: async ({ accountId, chatId, messageIds, botUserId }) => {
+      await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
+      for (const messageId of new Set(messageIds)) {
+        const key = telegramMessageCacheKey({ scopeKey, accountId, chatId, messageId });
+        const node = messages.get(key);
+        if (!node || node.historyEligible) {
+          continue;
+        }
+        const admitted = { ...node, historyEligible: true as const };
+        await persistCachedNode({ bucket, key, node: admitted, botUserId });
+        messages.set(key, admitted);
+      }
     },
     recordResolvedMedia: async ({ accountId, botUserId, chatId, messageId, media }) => {
       await hydrateMessageCacheBucket(bucket, maxMessages, scopeKey);
@@ -821,8 +859,13 @@ function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean
   );
 }
 
-function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
-  return isTelegramSessionBoundaryCommandText(node.body);
+/** Bot answers and edited text do not execute a new inbound reset. */
+export function isTelegramSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  return (
+    node.sourceMessage.from?.is_bot !== true &&
+    node.sourceMessage.edit_date === undefined &&
+    isTelegramSessionBoundaryCommandText(node.body)
+  );
 }
 
 function isAfterSessionBoundary(
@@ -873,6 +916,7 @@ async function resolveSessionBoundaryNode(params: {
   chatId: string | number;
   messageId?: string;
   threadId?: number;
+  boundaryNodeMatches?: (node: TelegramCachedMessageNode) => boolean;
 }): Promise<TelegramCachedMessageNode | undefined> {
   if (!params.messageId) {
     return undefined;
@@ -883,7 +927,8 @@ async function resolveSessionBoundaryNode(params: {
       chatId: params.chatId,
       messageId: params.messageId,
       ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-      matches: isSessionBoundaryCommandNode,
+      matches: (node) =>
+        isTelegramSessionBoundaryCommandNode(node) && (params.boundaryNodeMatches?.(node) ?? true),
     })) ?? undefined
   );
 }
@@ -939,6 +984,7 @@ export async function buildTelegramConversationContext(params: {
   recentLimit: number;
   replyTargetWindowSize: number;
   minTimestampMs?: number;
+  boundaryNodeMatches?: (node: TelegramCachedMessageNode) => boolean;
   includeNode?: (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => boolean;
 }): Promise<TelegramConversationContextNode[]> {
   const selected = new Map<string, TelegramConversationContextNode>();

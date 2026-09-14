@@ -39,6 +39,7 @@ import {
   type TelegramButtonBuildOptions,
   type TelegramDroppedControl,
 } from "./button-types.js";
+import { readTelegramCachedHistory } from "./cached-history-read.js";
 import { telegramInboundEventDelivery } from "./inbound-event-delivery.js";
 import {
   resolveTelegramInlineButtonsScope,
@@ -104,6 +105,7 @@ const TELEGRAM_ACTION_ALIASES = {
   "emoji-list": "emoji-list",
   poll: "poll",
   react: "react",
+  read: "read",
   searchSticker: "searchSticker",
   send: "sendMessage",
   sendMessage: "sendMessage",
@@ -461,6 +463,12 @@ export async function handleTelegramAction(
       inboundEventKind: options?.inboundEventKind,
     });
   };
+
+  if (action === "read") {
+    return jsonResult(
+      await readTelegramCachedHistory({ params, cfg, accountId, context: options }),
+    );
+  }
 
   if (action === "emoji-list") {
     if (!isActionEnabled("reactions")) {

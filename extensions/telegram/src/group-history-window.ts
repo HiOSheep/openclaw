@@ -1,5 +1,5 @@
 // Telegram plugin module implements group history window behavior.
-import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramPromptContextEntry,
@@ -196,18 +196,23 @@ export function mergeTelegramGroupHistoryPromptContext(params: {
   );
 }
 
-export function recordTelegramGroupHistoryEntry(params: {
-  historyMap: Map<string, HistoryEntry[]>;
-  historyKey?: string;
-  limit: number;
-  entry: HistoryEntry;
-}): void {
-  if (!params.historyKey) {
-    return;
-  }
-  createChannelHistoryWindow({ historyMap: params.historyMap }).record({
-    historyKey: params.historyKey,
-    limit: params.limit,
-    entry: params.entry,
-  });
+/** Derive the legacy inbound-history projection from the selected cache window. */
+export function telegramGroupHistoryEntries(
+  context: readonly TelegramPromptContextEntry[],
+): HistoryEntry[] {
+  return context.filter(isTelegramChatWindowPromptContext).flatMap((entry) =>
+    telegramPromptMessages(telegramChatWindowPayload(entry)).flatMap((message) => {
+      if (typeof message.message_id !== "string") {
+        return [];
+      }
+      return [
+        {
+          messageId: message.message_id,
+          sender: typeof message.sender === "string" ? message.sender : "unknown sender",
+          body: typeof message.body === "string" ? message.body : "<media>",
+          ...(typeof message.timestamp_ms === "number" ? { timestamp: message.timestamp_ms } : {}),
+        },
+      ];
+    }),
+  );
 }

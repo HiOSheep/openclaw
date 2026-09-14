@@ -209,6 +209,7 @@ export function createTelegramMessagePipeline({
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
   const {
     recordMessageForReplyChain,
+    markHistoryEligible,
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
@@ -600,7 +601,30 @@ export function createTelegramMessagePipeline({
             return await finalizeSpooledReplayResult(completed);
           },
         },
-        options: params.options,
+        options: {
+          ...params.options,
+          recordHistoryEligible: () =>
+            markHistoryEligible({
+              accountId,
+              chatId: params.msg.chat.id,
+              botUserId: params.ctx.me?.id,
+              messageIds: (params.options?.bufferedMessages?.length
+                ? params.options.bufferedMessages
+                : [params.msg]
+              ).map((message) => String(message.message_id)),
+            }),
+          readPromptContext: (threadSpec) =>
+            buildPromptContextForMessage(
+              params.ctx,
+              params.msg,
+              replyChainNodes,
+              runtimeCfg,
+              runtimeTelegramCfg,
+              { ...params.options, threadSpec },
+              promptContextMediaByMessageId,
+              params.promptContextMessageSelection,
+            ),
+        },
         replyMedia,
         replyChain,
         promptContext,
