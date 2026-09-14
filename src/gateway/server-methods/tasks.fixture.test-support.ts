@@ -9,8 +9,6 @@ import {
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { createTaskRecord as createTaskRecordOrNull } from "../../tasks/runtime-internal.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
@@ -72,14 +70,6 @@ export function useTaskGatewayFixture() {
   });
 
   return { cancelSessionMock };
-}
-
-export function createTaskRecord(params: Parameters<typeof createTaskRecordOrNull>[0]): TaskRecord {
-  const task = createTaskRecordOrNull(params);
-  if (!task) {
-    throw new Error("expected task creation to succeed");
-  }
-  return task;
 }
 
 export async function getTaskPayload(taskId: string) {

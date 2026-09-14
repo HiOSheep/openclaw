@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { markTaskTerminalById } from "../../tasks/runtime-internal.js";
+import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import {
-  createTaskRecord,
   getTaskPayload,
   mainSessionTaskScope,
   useTaskGatewayFixture,
@@ -18,8 +18,7 @@ describe("tasks gateway execution and activity", () => {
   ] as const)(
     "projects $status without inventing execution completion",
     async ({ status, ledgerStatus, executionState }) => {
-      const task = createTaskRecord({
-        runtime: "cli",
+      const task = createTaskFixture("cli", {
         ...mainSessionTaskScope,
         runId: "run-completed",
         task: "Done task",
@@ -37,8 +36,7 @@ describe("tasks gateway execution and activity", () => {
   );
 
   it("exposes tool activity in task summaries", async () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
+    const task = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -168,8 +166,7 @@ describe("tasks gateway execution and activity", () => {
   });
 
   it("keeps task attention until its current approvals resolve", async () => {
-    const task = createTaskRecord({
-      runtime: "subagent",
+    const task = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -217,8 +214,7 @@ describe("tasks gateway execution and activity", () => {
   });
 
   it("projects isolated live subagent activity and best-effort diff stats", async () => {
-    const primary = createTaskRecord({
-      runtime: "subagent",
+    const primary = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -229,8 +225,7 @@ describe("tasks gateway execution and activity", () => {
       deliveryStatus: "not_applicable",
       progressSummary: "Milestone remains authoritative",
     });
-    const secondary = createTaskRecord({
-      runtime: "subagent",
+    const secondary = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",

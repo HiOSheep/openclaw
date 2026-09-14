@@ -21,9 +21,9 @@ import {
 } from "../../tasks/runtime-internal.js";
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { reloadTaskRegistryFromStore } from "../../tasks/task-registry.js";
+import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import {
-  createTaskRecord,
   getTaskPayload,
   mainSessionTaskScope,
   useTaskGatewayFixture,
@@ -39,8 +39,7 @@ const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
   it("lists task summaries with SDK-facing statuses and filters", async () => {
-    const running = createTaskRecord({
-      runtime: "subagent",
+    const running = createTaskFixture("subagent", {
       taskKind: "investigation",
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
@@ -52,8 +51,7 @@ describe("tasks gateway handlers", () => {
       status: "running",
       deliveryStatus: "pending",
     });
-    createTaskRecord({
-      runtime: "cli",
+    createTaskFixture("cli", {
       requesterSessionKey: "agent:other:main",
       ownerKey: "agent:other:main",
       scopeKind: "session",
@@ -92,8 +90,7 @@ describe("tasks gateway handlers", () => {
   });
 
   it("uses the persisted fixed-store owner for a bare task session filter", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       requesterSessionKey: "global",
       ownerKey: "global",
       scopeKind: "session",
@@ -124,8 +121,7 @@ describe("tasks gateway handlers", () => {
     // activity so an old task that just finished is not hidden behind
     // newer-created records.
     const base = Date.now();
-    const oldButJustFinished = createTaskRecord({
-      runtime: "subagent",
+    const oldButJustFinished = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -134,8 +130,7 @@ describe("tasks gateway handlers", () => {
       deliveryStatus: "not_applicable",
       lastEventAt: base + 60_000,
     });
-    const newerQuietTask = createTaskRecord({
-      runtime: "cli",
+    const newerQuietTask = createTaskFixture("cli", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -223,8 +218,7 @@ describe("tasks gateway handlers", () => {
 
   it("preserves activity ordering across unchanged cursor pages", async () => {
     const created = [500, 100, 700, 300, 500].map((lastEventAt, index) =>
-      createTaskRecord({
-        runtime: "cli",
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -283,8 +277,7 @@ describe("tasks gateway handlers", () => {
 
   it("rejects a continuation after task activity changes", async () => {
     const created = [400, 300, 200, 100].map((lastEventAt, index) =>
-      createTaskRecord({
-        runtime: "cli",
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -347,8 +340,7 @@ describe("tasks gateway handlers", () => {
 
   it("clones only the requested task page", async () => {
     for (let index = 0; index < 6; index++) {
-      createTaskRecord({
-        runtime: "cli",
+      createTaskFixture("cli", {
         requesterSessionKey: "agent:main:main",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -395,8 +387,7 @@ describe("tasks gateway handlers", () => {
         );
       }
       const createTask = (sessionKey: string, lastEventAt: number) =>
-        createTaskRecord({
-          runtime: "cli",
+        createTaskFixture("cli", {
           requesterSessionKey: sessionKey,
           requesterAgentId: "main",
           ownerKey: sessionKey,
@@ -469,8 +460,7 @@ describe("tasks gateway handlers", () => {
     // Cross-agent subagent task: the registry derives agentId=worker from the
     // child session key, while owner/requester keys belong to main. tasks.list
     // for main must not leak the worker task through the session-key fallback.
-    const workerTask = createTaskRecord({
-      runtime: "subagent",
+    const workerTask = createTaskFixture("subagent", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -555,8 +545,7 @@ describe("tasks gateway handlers", () => {
       expected: "CLI fallback result",
     },
   ] as const)("returns the runtime-owned result for $label", async (fixture) => {
-    const task = createTaskRecord({
-      runtime: fixture.runtime,
+    const task = createTaskFixture(fixture.runtime, {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
@@ -585,8 +574,7 @@ describe("tasks gateway handlers", () => {
   });
 
   it("keeps bounded prompts lookup-only", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       ...mainSessionTaskScope,
       task: `Inspect the task prompt ${"x".repeat(5_000)}`,
       status: "running",
@@ -611,8 +599,7 @@ describe("tasks gateway handlers", () => {
       "    - test",
       "  ```",
     ].join("\n");
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       ...mainSessionTaskScope,
       task: `${visiblePrompt}\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nhidden\n${INTERNAL_RUNTIME_CONTEXT_END}`,
       status: "running",
@@ -625,8 +612,7 @@ describe("tasks gateway handlers", () => {
   });
 
   it("sanitizes task text before exposing SDK summaries", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       ...mainSessionTaskScope,
       runId: "run-sanitized",
       label:
@@ -665,8 +651,7 @@ describe("tasks gateway handlers", () => {
   });
 
   it("does not report cancellation for an ordinary task without a live owner", async () => {
-    const task = createTaskRecord({
-      runtime: "cli",
+    const task = createTaskFixture("cli", {
       requesterSessionKey: "agent:main:main",
       ownerKey: "agent:main:main",
       scopeKind: "session",
