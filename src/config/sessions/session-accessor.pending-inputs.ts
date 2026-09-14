@@ -31,7 +31,7 @@ import {
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
-  resolvePendingInputRequestHash,
+  preparePendingInputRequest,
   matchesSessionPendingInputRequest,
 } from "./session-accessor.pending-input-request.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
@@ -205,11 +205,10 @@ export async function stageSessionPendingInput(
   if (!idempotencyKey || !options.runId) {
     throw new Error("Pending input requires an exact run and message idempotency key");
   }
-  const { timestamp: _timestamp, ...stableMessage } = options.message;
-  if (Buffer.byteLength(JSON.stringify(stableMessage), "utf8") > MAX_PAYLOAD_BYTES) {
-    throw new Error("Pending input exceeds the Gateway payload limit");
-  }
-  const requestHash = resolvePendingInputRequestHash(stableMessage, options.requestFingerprint);
+  const { stableMessage, requestHash } = preparePendingInputRequest(
+    options.message,
+    options.requestFingerprint,
+  );
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {

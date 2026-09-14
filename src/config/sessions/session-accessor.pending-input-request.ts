@@ -1,15 +1,31 @@
 import { createHash } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { MAX_PAYLOAD_BYTES } from "../../gateway/server-constants.js";
+import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputRow } from "./session-accessor.sqlite-pending-inputs.js";
 
-export function resolvePendingInputRequestHash(
+function resolvePendingInputRequestHash(
   message: Record<string, unknown>,
   requestFingerprint?: string,
 ): string {
   return requestFingerprint
     ? `request:${requestFingerprint}`
     : createHash("sha256").update(stableStringify(message)).digest("hex");
+}
+
+export function preparePendingInputRequest(
+  message: PersistedUserTurnMessage,
+  requestFingerprint?: string,
+) {
+  const { timestamp: _timestamp, ...stableMessage } = message;
+  if (Buffer.byteLength(JSON.stringify(stableMessage), "utf8") > MAX_PAYLOAD_BYTES) {
+    throw new Error("Pending input exceeds the Gateway payload limit");
+  }
+  return {
+    stableMessage,
+    requestHash: resolvePendingInputRequestHash(stableMessage, requestFingerprint),
+  };
 }
 
 export function matchesSessionPendingInputRequest(
