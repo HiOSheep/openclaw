@@ -23,7 +23,7 @@ import type { ChannelWizardState } from "./wizard-controller.ts";
 export type ChannelKey = string;
 
 /** The pairing mutation currently in flight, if any. */
-export type ChannelsPairingBusy = {
+type ChannelsPairingBusy = {
   requestId: string;
   operation: ChannelsPairingOperation;
 };
