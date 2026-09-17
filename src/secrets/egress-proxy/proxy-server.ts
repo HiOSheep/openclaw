@@ -24,6 +24,7 @@ import {
   type SecretEgressCertificateStatus,
   type SecretEgressTlsContext,
 } from "./certificates.js";
+import { substituteLiteralSentinel, swapSecretEgressHeaders } from "./header-substitution.js";
 import {
   createSecretEgressBodyBudget,
   forwardSecretEgressRequest,
@@ -164,106 +165,23 @@ function swapRequestText(params: {
   host: string;
   registered: RegisteredRun;
 }): { value: string; substituted: boolean } {
-  if (!containsSecretSentinel(params.value)) {
-    return { value: params.value, substituted: false };
-  }
-  let substituted = false;
-  const swapped = params.value.replace(
-    new RegExp(SECRET_SENTINEL_PATTERN.source, "g"),
-    (sentinel) => {
-      const resolved = resolveRegisteredSentinel({
+  const swapped = substituteLiteralSentinel({
+    value: params.value,
+    urlMode: params.urlMode,
+    resolveSentinel: (sentinel) =>
+      resolveRegisteredSentinel({
         sentinel,
         host: params.host,
         registered: params.registered,
-      });
-      if (resolved === undefined) {
-        return sentinel;
-      }
-      substituted = true;
-      return params.urlMode ? encodeURIComponent(resolved) : resolved;
-    },
-  );
-  if (containsSecretSentinel(swapped)) {
+      }),
+    sentinelPattern: SECRET_SENTINEL_PATTERN,
+    containsSentinel: containsSecretSentinel,
+  });
+  // A sentinel that survives substitution was never resolved for this run/host.
+  if (containsSecretSentinel(swapped.value)) {
     throw new SecretEgressSubstitutionError("unresolved-sentinel");
   }
-  return { value: swapped, substituted };
-}
-
-const BASIC_AUTHORIZATION_PATTERN = /^Basic\s+([A-Za-z0-9+/]+={0,2})$/iu;
-
-/**
- * Substitutes a sentinel carried as an upstream HTTP Basic credential.
- *
- * Clients that only support Basic merge user and password and base64-encode the
- * result, so the literal sentinel never appears in the header and the plaintext
- * matcher cannot see it. Decoding here is not a new disclosure: the value is
- * only read to find a sentinel this run already registered, and the plaintext is
- * re-encoded before egress. Authorization is unchanged because
- * `resolveRegisteredSentinel` applies the same run liveness and exact-host
- * binding as the plaintext path. Anything this cannot read faithfully — a
- * non-canonical or non-UTF-8 payload, or no `user:password` separator — is
- * forwarded byte-identical to how it arrived.
- */
-function swapBasicAuthorizationText(params: {
-  value: string;
-  host: string;
-  registered: RegisteredRun;
-}): { value: string; substituted: boolean } {
-  const unchanged = { value: params.value, substituted: false };
-  const encoded = BASIC_AUTHORIZATION_PATTERN.exec(params.value.trim())?.[1];
-  if (!encoded) {
-    return unchanged;
-  }
-  const decoded = Buffer.from(encoded, "base64");
-  // `Buffer.from(..., "base64")` is lenient about trailing bits and padding, so
-  // only accept a payload that re-encodes to what arrived. Malformed credentials
-  // forward unchanged.
-  if (decoded.toString("base64").replace(/=+$/u, "") !== encoded.replace(/=+$/u, "")) {
-    return unchanged;
-  }
-  // Secrets are UTF-8 everywhere else in the store, so read the credential the
-  // same way. A credential that is not valid UTF-8, such as a binary or Latin-1
-  // password, would be rewritten by the round trip, so it forwards unchanged
-  // rather than being silently corrupted.
-  const credentials = decoded.toString("utf8");
-  if (!Buffer.from(credentials, "utf8").equals(decoded)) {
-    return unchanged;
-  }
-  if (!credentials.includes(":")) {
-    return unchanged;
-  }
-  const swapped = swapRequestText({
-    value: credentials,
-    urlMode: false,
-    host: params.host,
-    registered: params.registered,
-  });
-  if (!swapped.substituted) {
-    return unchanged;
-  }
-  return {
-    value: `Basic ${Buffer.from(swapped.value, "utf8").toString("base64")}`,
-    substituted: true,
-  };
-}
-
-function swapHeaderValue(params: {
-  /** Lowercased header name, as supplied by `swapRequestHeaders`. */
-  name: string;
-  value: string;
-  host: string;
-  registered: RegisteredRun;
-}): { value: string; substituted: boolean } {
-  const swapped = swapRequestText({
-    value: params.value,
-    urlMode: false,
-    host: params.host,
-    registered: params.registered,
-  });
-  if (swapped.substituted || params.name !== "authorization") {
-    return swapped;
-  }
-  return swapBasicAuthorizationText(params);
+  return swapped;
 }
 
 function swapRequestHeaders(params: {
@@ -274,38 +192,24 @@ function swapRequestHeaders(params: {
   headers: IncomingHttpHeaders;
   substituted: boolean;
 } {
-  const output: IncomingHttpHeaders = {};
-  let substituted = false;
-  for (const [name, rawValue] of Object.entries(params.headers)) {
-    const lowerName = name.toLowerCase();
-    if (lowerName === "proxy-authorization" || lowerName === "proxy-connection") {
-      continue;
-    }
-    if (Array.isArray(rawValue)) {
-      output[name] = rawValue.map((value) => {
-        const swapped = swapHeaderValue({
-          name: lowerName,
-          value,
-          host: params.host,
-          registered: params.registered,
-        });
-        substituted ||= swapped.substituted;
-        return swapped.value;
-      });
-      continue;
-    }
-    if (rawValue !== undefined) {
-      const swapped = swapHeaderValue({
-        name: lowerName,
-        value: rawValue,
+  return swapSecretEgressHeaders({
+    headers: params.headers,
+    substituteLiteral: (value) =>
+      swapRequestText({
+        value,
+        urlMode: false,
         host: params.host,
         registered: params.registered,
-      });
-      substituted ||= swapped.substituted;
-      output[name] = swapped.value;
-    }
-  }
-  return { headers: output, substituted };
+      }),
+    resolveSentinel: (sentinel) =>
+      resolveRegisteredSentinel({
+        sentinel,
+        host: params.host,
+        registered: params.registered,
+      }),
+    sentinelPattern: SECRET_SENTINEL_PATTERN,
+    containsSentinel: containsSecretSentinel,
+  });
 }
 
 /** Starts one authenticated, loopback-only substitution proxy. */
