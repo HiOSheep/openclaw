@@ -864,16 +864,24 @@ describe("secret egress proxy", () => {
     },
   );
 
-  it.each(["url", "header", "body"] as const)(
+  it.each(["url", "header", "body", "basic"] as const)(
     "refuses an unresolved sentinel in the %s",
     async (location) => {
       const unknown = tamperSentinel(
         mintSecretSentinel(`unknown-${location}`, { label: `egress-${location}` }),
       );
       const before = originRequests.length;
+      // A Basic credential must refuse too: an unresolvable placeholder may not
+      // travel upstream just because it arrived base64-encoded.
+      const basicCredential = `Basic ${Buffer.from(`oauth2:${unknown}`).toString("base64")}`;
       const result = await requestThroughTunnel({
         path: location === "url" ? `/refuse?token=${unknown}` : "/refuse",
-        headers: location === "header" ? { "X-Token": unknown } : undefined,
+        headers:
+          location === "header"
+            ? { "X-Token": unknown }
+            : location === "basic"
+              ? { Authorization: basicCredential }
+              : undefined,
         bodyChunks: location === "body" ? [unknown] : undefined,
       });
 

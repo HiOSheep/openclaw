@@ -4,6 +4,7 @@
 // inside an HTTP Basic credential. Both shapes are resolved through one callback so
 // the caller keeps ownership of run liveness and exact-host binding.
 import type { IncomingHttpHeaders } from "node:http";
+import { SecretEgressSubstitutionError } from "./stream-substitution.js";
 
 /** Resolves one sentinel for the current run and destination, or undefined when unregistered. */
 export type SecretEgressSentinelResolver = (sentinel: string) => string | undefined;
@@ -48,8 +49,8 @@ export function substituteLiteralSentinel(params: {
  * only read to find a sentinel this run already registered, and the plaintext is
  * re-encoded before egress. Authorization is unchanged because the resolver
  * applies the same run liveness and exact-host binding as the plaintext path.
- * Anything this cannot read faithfully — a non-canonical or non-UTF-8 payload,
- * or no `user:password` separator — is forwarded byte-identical to how it arrived.
+ * Anything this cannot read faithfully 鈥?a non-canonical or non-UTF-8 payload,
+ * or no `user:password` separator 鈥?is forwarded byte-identical to how it arrived.
  */
 function swapBasicAuthorizationText(params: {
   value: string;
@@ -87,6 +88,11 @@ function swapBasicAuthorizationText(params: {
     sentinelPattern: params.sentinelPattern,
     containsSentinel: params.containsSentinel,
   });
+  // A sentinel this run cannot resolve must refuse, not travel upstream as a
+  // credential. The plaintext path reaches the same verdict in its caller.
+  if (params.containsSentinel(swapped.value)) {
+    throw new SecretEgressSubstitutionError("unresolved-sentinel");
+  }
   if (!swapped.substituted) {
     return unchanged;
   }
