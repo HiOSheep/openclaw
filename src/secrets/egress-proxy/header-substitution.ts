@@ -97,7 +97,7 @@ function swapBasicAuthorizationText(params: {
 }
 
 /** Substitutes one header value, covering both literal and Basic-encoded sentinels. */
-export function swapSecretEgressHeaderValue(params: {
+function swapSecretEgressHeaderValue(params: {
   /** Lowercased header name. */
   name: string;
   value: string;
